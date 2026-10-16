@@ -3,17 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#285448">
+  <meta name="theme-color" content="#3974d5">
   <!-- Keep an invisible title so the browser app window does not fall back to showing its URL. -->
   <title>&#8203;</title>
   <!-- Real web favicon; the desktop executable owns its native taskbar icon. -->
-  <link rel="icon" type="image/png" href="/static/ezread-icon.png?v=20261005-taskbar2">
-  <link rel="shortcut icon" type="image/x-icon" href="/static/ezread.ico?v=20261005-taskbar2">
+  <link rel="icon" type="image/png" href="/static/ezread-icon.png?v=20261016-blue-book">
+  <link rel="shortcut icon" type="image/x-icon" href="/static/ezread.ico?v=20261016-blue-book">
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/preferences.css">
   <link rel="stylesheet" href="/static/reader.css">
   <link rel="stylesheet" href="/static/redesign.css">
-  <link rel="stylesheet" href="/static/surfaces.css?v=20261005">
+  <link rel="stylesheet" href="/static/surfaces.css?v=20261016-blue-book">
   <script src="/static/reader.js" defer></script>
   <script src="/static/reader-pdf.js" defer></script>
   <script src="/static/reader-layout.js" defer></script>
@@ -66,49 +66,53 @@
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H4v13h4"/></symbol>
     <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.8 13.2A9 9 0 0 1 10.8 3.1 9 9 0 1 0 20.8 13.2Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
   </defs></svg>
   <div class="app-shell">
     <aside class="sidebar" id="sidebar" aria-label="侧边栏">
       <div class="brand"><img class="brand-icon" width="40" height="40" src="/static/ezread-icon.png" alt=""><span>EzRead</span></div>
       <div class="sidebar-scroll">
-      <label class="search-box"><svg class="icon"><use href="#i-search"/></svg><input id="search" type="search" autocomplete="off" placeholder="搜索论文…" aria-label="搜索论文"></label>
-      <div class="library-tools" id="library-tools">
-        <h2 class="nav-heading">筛选</h2>
-        <div class="filter-group" role="group" aria-label="筛选条件">
-          <nav id="main-nav" aria-label="文献类型">
-            <button class="nav-item active" data-view="all"><svg class="icon"><use href="#i-grid"/></svg>全部论文<span id="nav-count" class="nav-count">0</span></button>
-            <button class="nav-item" data-filter-type="journal"><svg class="icon"><use href="#i-book"/></svg>期刊论文</button>
-            <div class="nav-tertiary" aria-label="期刊论文筛选">
-              <button type="button" class="filter-trigger" data-select="filter-journal" aria-label="筛选出版来源：所有出版来源" aria-controls="filter-menu" aria-expanded="false"><span>出版来源</span><span class="filter-chevron" aria-hidden="true"></span></button><select id="filter-journal" aria-label="筛选出版来源" hidden><option value="">所有出版来源</option></select>
-              <button type="button" class="filter-trigger" data-select="filter-tier" aria-label="筛选期刊等级：全部等级" aria-controls="filter-menu" aria-expanded="false"><span>期刊等级</span><span class="filter-chevron" aria-hidden="true"></span></button><select id="filter-tier" aria-label="筛选期刊等级" hidden><option value="">全部等级</option><option value="top">顶级</option><option value="important">重要</option><option value="other">其他</option></select>
-            </div>
-            <button class="nav-item" data-filter-type="conference"><svg class="icon"><use href="#i-file"/></svg>会议论文</button>
-            <button class="nav-item" data-filter-type="preprint"><svg class="icon"><use href="#i-file"/></svg>预印本</button>
-          </nav>
-          <select id="filter-type" aria-label="筛选文献类型" hidden><option value="">全部论文</option><option value="journal">期刊论文</option><option value="conference">会议论文</option><option value="preprint">预印本</option></select>
-          <button id="clear-filters" class="text-button hidden">清除筛选</button>
-        </div>
-        <h2 class="nav-heading sort-heading">排序</h2>
-        <div class="sidebar-sort" role="group" aria-label="论文排序">
-          <div class="sort-row"><span>导入时间</span><button type="button" data-sort-key="imported" data-sort-direction="desc">最新导入</button><button type="button" data-sort-key="imported" data-sort-direction="asc">最早导入</button></div>
-          <div class="sort-row"><span>发表时间</span><button type="button" data-sort-key="year" data-sort-direction="desc">最新发表</button><button type="button" data-sort-key="year" data-sort-direction="asc">最早发表</button></div>
-          <div class="sort-row"><span>最近阅读</span><button type="button" data-sort-key="recent" data-sort-direction="desc">最近读过</button><button type="button" data-sort-key="recent" data-sort-direction="asc">最久未读</button></div>
-          <select id="sort" aria-label="论文排序" hidden><option value="recent">最近阅读</option><option value="imported">导入时间</option><option value="year">发表时间</option></select>
-          <input id="sort-direction" type="hidden" value="desc">
-        </div>
-      </div>
-      <button id="import-top" class="button secondary sidebar-action" aria-label="导入 PDF"><svg class="icon"><use href="#i-upload"/></svg><span>导入 PDF</span></button>
-      <div class="nav-heading collection-heading"><span>主要合集</span><button id="new-collection" class="icon-button" aria-label="添加主要合集"><svg class="icon"><use href="#i-plus"/></svg></button></div>
-      <button class="nav-item" data-view="favorites"><svg class="icon"><use href="#i-star"/></svg>我的收藏</button>
+      <nav id="main-nav" aria-label="文献库导航">
+        <button class="nav-item active" data-view="all"><svg class="icon"><use href="#i-grid"/></svg>全部论文<span id="nav-count" class="nav-count">0</span></button>
+        <button class="nav-item" data-view="favorites"><svg class="icon"><use href="#i-star"/></svg>我的收藏</button>
+      </nav>
+      <div class="nav-heading collection-heading"><span>合集</span><button id="new-collection" class="icon-button" aria-label="添加合集"><svg class="icon"><use href="#i-plus"/></svg></button></div>
       <div id="collections-nav" class="collections-nav"></div>
       </div>
       <div class="sidebar-bottom">
         <button class="nav-item" data-view="queue" aria-haspopup="dialog" aria-controls="queue-dialog" aria-expanded="false"><svg class="icon"><use href="#i-translate"/></svg>翻译任务<span id="queue-count" class="nav-count hidden">0</span></button>
-        <button class="nav-item" id="settings-button"><svg class="icon"><use href="#i-settings"/></svg>设置</button>
+        <div class="sidebar-utilities">
+          <button type="button" id="theme-toggle" class="icon-button" aria-label="切换到夜间主题"><svg class="icon"><use href="#i-moon"/></svg></button>
+          <button class="nav-item" id="settings-button"><svg class="icon"><use href="#i-settings"/></svg>设置</button>
+        </div>
       </div>
     </aside>
     <main class="workspace">
       <section class="library-view" id="library-view" aria-label="全部论文">
+        <header class="library-header">
+          <h1>文献库</h1>
+          <label class="search-box"><svg class="icon"><use href="#i-search"/></svg><input id="search" type="search" autocomplete="off" placeholder="搜索论文…" aria-label="搜索论文"></label>
+          <button id="import-top" class="button primary" aria-label="导入 PDF"><svg class="icon"><use href="#i-plus"/></svg><span>导入 PDF</span></button>
+        </header>
+        <section id="recent-reading" class="recent-reading hidden" aria-label="最近阅读"></section>
+        <div class="library-toolbar filter-group" id="library-tools" role="group" aria-label="文献筛选与排序">
+          <div class="library-type-tabs" role="group" aria-label="文献类型">
+            <button type="button" class="active" data-filter-type="" aria-pressed="true">全部</button>
+            <button type="button" data-filter-type="journal" aria-pressed="false">期刊</button>
+            <button type="button" data-filter-type="conference" aria-pressed="false">会议</button>
+            <button type="button" data-filter-type="preprint" aria-pressed="false">预印本</button>
+          </div>
+          <select id="filter-type" aria-label="筛选文献类型" hidden><option value="">全部论文</option><option value="journal">期刊论文</option><option value="conference">会议论文</option><option value="preprint">预印本</option></select>
+          <div class="library-filter-actions">
+            <button type="button" class="filter-trigger" data-select="filter-journal" aria-label="筛选出版来源" aria-controls="filter-menu" aria-expanded="false"><span>出版来源</span><span class="filter-chevron" aria-hidden="true"></span></button><select id="filter-journal" aria-label="筛选出版来源" hidden><option value="">所有出版来源</option></select>
+            <button type="button" class="filter-trigger" data-select="filter-tier" aria-label="筛选期刊等级" aria-controls="filter-menu" aria-expanded="false"><span>期刊等级</span><span class="filter-chevron" aria-hidden="true"></span></button><select id="filter-tier" aria-label="筛选期刊等级" hidden><option value="">全部等级</option><option value="top">顶级</option><option value="important">重要</option><option value="other">其他</option></select>
+            <button id="clear-filters" class="text-button hidden">清除筛选</button>
+            <select id="library-sort" aria-label="论文排序"><option value="recent:desc">最近阅读</option><option value="recent:asc">最久未读</option><option value="imported:desc">最新导入</option><option value="imported:asc">最早导入</option><option value="year:desc">最新发表</option><option value="year:asc">最早发表</option></select>
+            <select id="sort" hidden aria-label="排序字段"><option value="recent">最近阅读</option><option value="imported">导入时间</option><option value="year">发表时间</option></select><input id="sort-direction" type="hidden" value="desc">
+          </div>
+        </div>
         <span class="sr-only" id="result-count" role="status">正在打开文献库…</span>
         <div id="active-collection" class="collection-banner hidden"></div>
         <div class="bulkbar hidden" id="bulkbar" role="toolbar" aria-label="多选操作"></div>

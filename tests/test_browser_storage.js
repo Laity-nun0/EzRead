@@ -68,14 +68,14 @@ for (const width of ["", "NaN", "Infinity", "-100", "0", "99999", "616px"]) {
 storage.failWrite = true;
 assert.equal(context.writeBrowserSetting("chatWidth", "800", storage), false);
 assert.equal(context.readBrowserSetting("chatWidth", storage), "720.5");
-context.document = { documentElement: { dataset: {}, style: { setProperty() {} } }, hidden: false, querySelectorAll: () => [] };
+context.document = { documentElement: { dataset: {}, style: { setProperty() {} } }, hidden: false, querySelector: () => null, querySelectorAll: () => [] };
 for (const file of ["state.js", "preferences.js"]) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../static/core", file), "utf8"), context);
 }
 for (const theme of ["paper", "sage", "graphite", "cream", "light", "unknown", null]) {
   context.localStorage = fixture(); context.themeUnderTest = theme;
   vm.runInContext("state.settings.theme = themeUnderTest; state.settings.ui_font_size = 20; applyPreferences();", context);
-  const expected = ["paper", "sage", "graphite"].includes(theme) ? theme : "paper";
+  const expected = ["paper", "graphite"].includes(theme) ? theme : "paper";
   assert.equal(context.document.documentElement.dataset.theme, expected);
   assert.equal(vm.runInContext("state.settings.theme", context), expected);
   const saved = JSON.parse(context.localStorage.entries.get("ezread-preferences"));

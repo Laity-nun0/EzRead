@@ -5,11 +5,9 @@ async function openSettings(initialPanel = "appearance") {
   function preferenceRange(key, label, min, max) {
     return el("div", { class: "preference-control" }, el("label", {}, label), el("input", { type: "range", min, max, step: 1, value: state.settings[key] ?? DEFAULT_PREFERENCES[key], dataset: { preference: key }, "aria-label": label, oninput: event => changePreference({ [key]: Number(event.target.value) }) }), el("output", { dataset: { preferenceOutput: key } }, `${state.settings[key]} px`));
   }
-  const themes = el("div", { class: "theme-grid" }, THEME_CHOICES.map(([value, name]) => el("button", { type: "button", class: `theme-choice ${state.settings.theme === value ? "selected" : ""}`, dataset: { themeChoice: value }, "aria-pressed": state.settings.theme === value, onclick: () => changePreference({ theme: value }) }, el("span", { class: "theme-swatch", "aria-hidden": "true" }), name)));
   const fullTranslation = defaultTranslationPanel();
   const panels = [
     ["appearance", "外观与字号", el("div", {},
-      el("h3", {}, "阅读主题"), themes,
       el("section", { class: "settings-section" }, el("h3", {}, "字号"),
         preferenceRange("ui_font_size", "界面字号", 14, 22),
         preferenceRange("reader_font_size", "中文阅读字号", 14, 28),

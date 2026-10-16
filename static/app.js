@@ -64,11 +64,13 @@ function installEvents() {
     if ($(selector).value) $("#filter-type").value = "journal";
     renderLibrary();
   }));
-  $$("[data-sort-key]").forEach(node => node.addEventListener("click", () => {
-    $("#sort").value = node.dataset.sortKey; $("#sort-direction").value = node.dataset.sortDirection;
-    writeBrowserSetting("sort", $("#sort").value); writeBrowserSetting("direction", $("#sort-direction").value);
+  $("#library-sort").addEventListener("change", event => {
+    const [key, direction] = event.target.value.split(":");
+    $("#sort").value = key; $("#sort-direction").value = direction;
+    writeBrowserSetting("sort", key); writeBrowserSetting("direction", direction);
     renderLibrary();
-  }));
+  });
+  $("#theme-toggle").addEventListener("click", () => changePreference({ theme: state.settings.theme === "graphite" ? "paper" : "graphite" }, true));
   $("#clear-filters").addEventListener("click", clearFilters);
   $("#new-collection").addEventListener("click", () => { openDialog("#collection-dialog"); $("#collection-name").focus(); });
   $("#collection-form").addEventListener("submit", event => { event.preventDefault(); act(() => createCollection($("#collection-name").value), $("#collection-form button[type=submit]")); });

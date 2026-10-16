@@ -12,12 +12,8 @@ function syncFilterTriggers() {
   });
 }
 function syncSortControls() {
-  const key = $("#sort").value, direction = $("#sort-direction").value;
-  $$("[data-sort-key]").forEach(button => {
-    const selected = button.dataset.sortKey === key && button.dataset.sortDirection === direction;
-    button.setAttribute("aria-pressed", String(selected));
-    button.classList.toggle("active", selected);
-  });
+  $("#library-sort").value = `${$("#sort").value}:${$("#sort-direction").value}`;
+  if (typeof syncSelectMenus === "function") syncSelectMenus();
 }
 function closeFilterMenu(restoreFocus = false) {
   if (!activeFilterTrigger) return;
@@ -63,8 +59,8 @@ function openFilterMenu(trigger) {
 function renderNav() {
   $("#nav-count").textContent = state.papers.length;
   const collections = allCollections();
-  $("#collections-nav").replaceChildren(...(collections.length ? collections.map(name => makeDropTarget(el("button", { class: `nav-item collection-nav ${state.view === "collection" && state.collection === name ? "active" : ""}`, "aria-pressed": String(state.view === "collection" && state.collection === name), onclick: () => toggleView("collection", name), title: `查看 ${name}；再次点击退出；可将论文拖入` }, el("span", { class: "collection-dot" }), el("span", { class: "collection-label", text: name }), el("span", { class: "nav-count", text: state.papers.filter(p => p.collection === name).length })), "collection", name)) : [el("p", { class: "collection-empty" }, "暂无主要合集") ]));
-  $$(".nav-item[data-view]").forEach(n => { if (n.dataset.view === "queue") { const open = $("#queue-dialog").open; n.classList.toggle("active", open); n.setAttribute("aria-expanded", String(open)); n.removeAttribute("aria-current"); return; } const active = n.dataset.view === state.view && (n.dataset.view !== "all" || !$("#filter-type").value); n.classList.toggle("active", active); if (active) n.setAttribute("aria-current", "page"); else n.removeAttribute("aria-current"); });
+  $("#collections-nav").replaceChildren(...(collections.length ? collections.map(name => makeDropTarget(el("button", { class: `nav-item collection-nav ${state.view === "collection" && state.collection === name ? "active" : ""}`, "aria-pressed": String(state.view === "collection" && state.collection === name), onclick: () => toggleView("collection", name), title: `查看 ${name}；再次点击退出；可将论文拖入` }, el("span", { class: "collection-dot" }), el("span", { class: "collection-label", text: name }), el("span", { class: "nav-count", text: state.papers.filter(p => p.collection === name).length })), "collection", name)) : [el("p", { class: "collection-empty" }, "暂无合集") ]));
+  $$(".nav-item[data-view]").forEach(n => { if (n.dataset.view === "queue") { const open = $("#queue-dialog").open; n.classList.toggle("active", open); n.setAttribute("aria-expanded", String(open)); n.removeAttribute("aria-current"); return; } const active = n.dataset.view === state.view; n.classList.toggle("active", active); if (active) n.setAttribute("aria-current", "page"); else n.removeAttribute("aria-current"); });
   $$("[data-filter-type]").forEach(n => { const active = n.dataset.filterType === $("#filter-type").value; n.classList.toggle("active", active); n.setAttribute("aria-pressed", String(active)); });
   $(".nav-item[data-view='favorites']")?.setAttribute("aria-pressed", String(state.view === "favorites"));
   const active = state.papers.filter(p => ACTIVE_STATUSES.has(p.pdf_layout_translation?.status) || ACTIVE_STATUSES.has(p.summarize_status)).length;

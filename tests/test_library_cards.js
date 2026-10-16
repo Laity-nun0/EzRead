@@ -110,7 +110,7 @@ assert.equal(cards[5].style.left, cards[1].style.left);
 assert.equal(cards[5].style.top, "266px");
 assert.equal(grid.style.height, "716px");
 assert.ok(observed.includes(container), "Parent width must be observed even when the fixed-width grid does not change");
-assert.ok(cards.every(card => card.style.width === "326.4px"));
+assert.ok(cards.every(card => card.style.width === "287px"));
 
 // Column transitions never change card width or the space between cards.
 container.clientWidth = 1500;
@@ -134,9 +134,9 @@ for (const available of [850, 320]) {
 }
 assert.ok(parseFloat(grid.style.width) > container.clientWidth, "Below two columns the layout overflows instead of shrinking");
 for (let count = 3; count <= 5; count++) {
-  const threshold = count * 326.4 + (count - 1) * 16;
-  assert.equal(layoutContext.paperColumnCount(threshold, 326.4, 16), count);
-  assert.equal(layoutContext.paperColumnCount(threshold - 1, 326.4, 16), count - 1);
+  const threshold = count * 292 + (count - 1) * 16;
+  assert.equal(layoutContext.paperColumnCount(threshold, 292, 16), count);
+  assert.equal(layoutContext.paperColumnCount(threshold - 1, 292, 16), count - 1);
 }
 
 container.clientWidth = 1736;

@@ -49,6 +49,7 @@ class Handler(SimpleHTTPRequestHandler):
                                 paper_ai={'model': 'gpt-6.1-sol', 'reasoning_effort': 'low'})
                     if i % 4:
                         item['cover_url'] = f"/fixture-cover/{['square', 'tall', 'wide'][i % 3]}.svg"
+            papers[1].update(last_read='2026-10-16T08:00:00+00:00', reader_state={'page': 3}, page_count=12)
             catalogue = {'rows': [{'issn': '1234-5678', 'name': 'Test Journal', 'aliases': '', 'tier': 'other'}],
                          'counts': {'top': 0, 'important': 0, 'other': 1}, 'revision': 'fixture-catalogue', 'error': ''}
             value = {'/api/papers': {'papers': papers, 'collections': []}, '/api/settings': {'theme': 'sage'}, '/api/journal-catalogue': catalogue, '/api/models': {'models': []}, '/api/status': {'codex': {'available': False, 'authenticated': False}, 'queue': []}, '/api/usage': {'status': 'unavailable', 'buckets': []}}.get(name, {})
@@ -152,6 +153,10 @@ def main():
                     if item['label'].endswith('-half'):
                         assert len(item['layout']['tracks']) == 2, item
                 for item in (*layouts, *checks.values(), *dpi_checks):
+                    assert item['cardBox']['coversBeforeText'], f"Card cover order changed: {item['label']}"
+                    assert item['cardBox']['titlesFit'], f"Card title was clipped: {item['label']}"
+                    assert item['cardBox']['recentVisible'], f"Recent reading is missing: {item['label']}"
+                    assert item['cardBox']['themeButtons'] == 1, item['cardBox']
                     assert not item['horizontalScroll'], f"Unexpected horizontal scrollbar: {item['label']}"
                     assert not item['verticalScroll'], f"Unexpected outer vertical scrollbar: {item['label']}"
                     assert item['viewWidth'] <= item['clientWidth'], item

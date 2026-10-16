@@ -6,10 +6,11 @@ function renderLibrary() {
   renderNav();
   selectOptions("#filter-journal", [...new Set(state.papers.map(journalOf))].sort((a, b) => a.localeCompare(b, "en", { sensitivity: "base" })), "所有出版来源");
   $("#library-view").setAttribute("aria-label", state.collection || VIEW_NAMES[state.view] || VIEW_NAMES.all);
-  const hasFilters = Boolean(state.query || $$(".filter-group select:not(#sort)").some(s => s.value));
+  const hasFilters = Boolean(state.query || $$('.filter-group select[id^="filter-"]').some(s => s.value));
   $("#clear-filters").classList.toggle("hidden", !hasFilters);
   syncFilterTriggers();
   syncSortControls();
+  renderRecentReading();
   const grid = $("#paper-grid"), empty = $("#empty-state");
   grid.classList.remove("masonry", "is-laid-out"); grid.style.height = "";
   if (state.loading) { grid.replaceChildren(...Array.from({ length: 6 }, () => el("div", { class: "skeleton-card" }))); empty.classList.add("hidden"); return; }
@@ -19,6 +20,25 @@ function renderLibrary() {
   else if (papers.length) renderMasonry(grid, papers);
   else grid.replaceChildren();
   renderLegend(); renderBulkbar(papers);
+}
+function renderRecentReading() {
+  const container = $("#recent-reading");
+  const hasFilters = state.query.trim() || ["#filter-type", "#filter-journal", "#filter-tier"].some(selector => $(selector).value);
+  const paper = !state.loading && state.view === "all" && !state.selectionMode && !hasFilters
+    ? state.papers.reduce((latest, candidate) => dateMs(candidate.last_read) > dateMs(latest?.last_read) ? candidate : latest, null) : null;
+  container.classList.toggle("hidden", !paper);
+  if (!paper) { container.replaceChildren(); return; }
+  const cover = el("div", { class: "recent-cover" }, paper.cover_url ? imageNode(paper.cover_url, { alt: "", onerror: event => event.target.replaceWith(placeholderImage()) }) : placeholderImage());
+  const page = Number(paper.reader_state?.page ?? paper.read_page), total = Number(paper.page_count);
+  const validPage = Number.isInteger(page) && page > 0 && (!Number.isInteger(total) || total <= 0 || page <= total);
+  const position = validPage ? `第 ${page} 页${Number.isInteger(total) && total > 0 ? ` / 共 ${total} 页` : ""}` : "";
+  const year = Number(paper.year), source = [journalOf(paper), Number.isInteger(year) && year >= 1000 && year <= 9999 ? String(year) : ""].filter(Boolean).join(" · ");
+  container.replaceChildren(cover, el("div", { class: "recent-copy" },
+    el("span", { class: "recent-eyebrow" }, icon("clock"), "最近阅读"),
+    source ? el("p", { class: "recent-source" }, source) : null,
+    el("h2", { class: "recent-title", lang: "en" }, titleOf(paper)),
+    position ? el("p", { class: "recent-position" }, position) : null),
+  button("继续阅读", event => act(() => openReader(paper.id), event.currentTarget), "primary recent-resume", "arrow"));
 }
 function measurePaperCardHeight(card, width, cache) {
   const image = card.querySelector("img"), font = getComputedStyle(document.documentElement).fontSize;
@@ -42,8 +62,8 @@ function paperLayoutMetrics(grid = $("#paper-grid")) {
   const sidebar = $(".sidebar"), gap = Math.round((Number.parseFloat(getComputedStyle(grid).columnGap) || 0) * 10) / 10;
   const padding = (Number.parseFloat(containerStyle.paddingLeft) || 0) + (Number.parseFloat(containerStyle.paddingRight) || 0);
   const sidebarWidth = sidebar.getBoundingClientRect().width;
-  // Match the existing five-column desktop at its reference body width.
-  const cardWidth = Math.round((1920 - sidebarWidth - padding - 4 * gap) / 5 * 10) / 10;
+  // Reserve the stable scrollbar gutter so the 1440px reference fits four columns.
+  const cardWidth = Math.round((1440 - 20 - sidebarWidth - padding - 3 * gap) / 4 * 10) / 10;
   return { cardWidth, gap, available: container.clientWidth - padding,
     minimumWidth: sidebarWidth + padding + 2 * cardWidth + gap };
 }
@@ -95,23 +115,22 @@ function renderMasonry(grid, papers) {
   schedule();
 }
 function renderCard(p) {
-  const t = pdfLayoutOf(p), rank = rankAppearance(p), cover = el("div", { class: "card-cover-inner" });
+  const rank = rankAppearance(p), cover = el("div", { class: "card-cover-inner" });
   const media = el("div", { class: "cover-media" });
   if (p.cover_url) { const img = imageNode(p.cover_url, { alt: `${titleOf(p)} · 封面`, onerror: event => event.target.replaceWith(placeholderImage()) }); media.append(img); } else media.append(placeholderImage());
   cover.append(media);
   const favorite = el("button", { class: `card-save ${p.favorite ? "saved" : ""}`, title: p.favorite ? "取消收藏" : "收藏论文", "aria-label": p.favorite ? "取消收藏" : "收藏论文", onclick: event => { event.stopPropagation(); act(() => patchPaper(p.id, { favorite: !p.favorite }), event.currentTarget); } }, icon("star"));
-  const remove = iconButton("trash", `永久删除论文：${titleOf(p)}`, event => { event.stopPropagation(); if (confirm(`永久删除《${titleOf(p)}》及其文件、笔记、译文和全部会话？无法在应用内恢复。`)) void act(() => deletePapers([p.id]), event.currentTarget); });
-  remove.classList.add("card-delete");
-  const cornerAction = state.selectionMode ? el("button", { class: `card-select ${state.selectedPapers.has(p.id) ? "selected" : ""}`, title: state.selectedPapers.has(p.id) ? "取消选择" : "选择论文", "aria-label": `${state.selectedPapers.has(p.id) ? "取消选择" : "选择论文"}：${titleOf(p)}`, "aria-pressed": String(state.selectedPapers.has(p.id)), onclick: event => { event.stopPropagation(); togglePaperSelection(p.id); } }, state.selectedPapers.has(p.id) ? icon("check") : null) : remove;
-  const actions = el("div", { class: "card-actions" }, favorite, cornerAction);
-  const translation = button(cardTranslationLabel(p), event => { event.stopPropagation(); act(() => openPdfLayoutSetup(p), event.currentTarget); }, "card-translate", "translate", { title: `PDF 版式翻译 · ${statusName(t.status)}；点击查看设置、重译和版本`, "aria-label": `${cardTranslationLabel(p)}：${titleOf(p)}` });
-  const details = button("论文简介", event => { event.stopPropagation(); act(() => openDetail(p.id)); }, "card-detail", "arrow", { "aria-label": `查看论文简介：${titleOf(p)}` });
-  const config = cardModelConfig(p);
-  const configText = config.model ? `${config.legacy ? "历史 Codex" : apiProviderLabel(config.provider)} · ${config.model}` : "API 模型待配置";
-  const model = button(configText, event => { event.stopPropagation(); void openPaperModel(p); }, "card-ai-model", "", { "aria-label": `本篇 API 模型：${configText}`, title: `${config.locked ? "本篇已固定 API 配置" : "首次 AI 任务时按当前 API 默认配置固定"}；点击更改` });
-  const chat = button("对话", event => { event.stopPropagation(); act(async () => { await openReader(p.id); await openPaperChat(); }); }, "card-ai-chat", "chat");
-  const body = el("div", { class: "card-body" }, el("div", { class: "card-header" }, el("div", { class: "card-journal" }, el("span", { class: "journal-badge", title: p.conference_name || journalNameOf(p) }, journalOf(p)), el("span", { class: "card-year" }, p.year || "年份待补充")), actions), el("h2", { class: "card-title", lang: "en" }, titleOf(p)));
-  const content = el("div", { class: "card-content" }, el("div", { class: "card-cover" }, cover), el("div", { class: "card-controls" }, translation, details, model, chat));
+  const more = iconButton("more", `更多操作：${titleOf(p)}`, event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openCardMenu(p, rect.right, rect.bottom + 6); });
+  more.classList.add("card-more"); more.setAttribute("aria-haspopup", "menu"); more.setAttribute("aria-controls", "card-context-menu");
+  const selection = state.selectionMode ? el("button", { class: `card-select ${state.selectedPapers.has(p.id) ? "selected" : ""}`, "aria-label": `${state.selectedPapers.has(p.id) ? "取消选择" : "选择论文"}：${titleOf(p)}`, "aria-pressed": String(state.selectedPapers.has(p.id)), onclick: event => { event.stopPropagation(); togglePaperSelection(p.id); } }, state.selectedPapers.has(p.id) ? icon("check") : null) : null;
+  const actions = el("div", { class: "card-actions" }, favorite, selection, more);
+  const source = el("div", { class: "card-journal" }, el("span", { class: `card-tier tier-${rank.tier}`, "aria-label": TIER_NAMES[rank.tier] || "其他" }),
+    el("span", { class: "journal-badge" }, journalOf(p)), el("span", { class: "card-year" }, p.year || "年份待补充"));
+  const tags = list(p.tags).map(asText).filter(Boolean).slice(0, 2);
+  const body = el("div", { class: "card-body" }, el("div", { class: "card-header" }, source, actions),
+    el("h2", { class: "card-title", lang: "en" }, titleOf(p)),
+    tags.length ? el("div", { class: "card-tags" }, tags.map(tag => el("span", { class: "card-tag" }, tag))) : null);
+  const content = el("div", { class: "card-content" }, el("div", { class: "card-cover" }, cover));
   const activate = () => state.selectionMode ? togglePaperSelection(p.id) : act(() => openReader(p.id));
   let dragStarted = false;
   return el("article", { class: `paper-card paper-${rank.type} tier-${rank.tier} ${state.selectionMode && state.selectedPapers.has(p.id) ? "is-selected" : ""}`, dataset: { paperId: p.id }, draggable: "true", tabindex: "0", role: "group", "aria-label": `阅读论文：${titleOf(p)}`, ondragstart: event => {
@@ -127,7 +146,7 @@ function renderCard(p) {
     if (event.target !== event.currentTarget) return;
     if (event.key === "ContextMenu" || event.shiftKey && event.key === "F10") { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openCardMenu(p, rect.left + 24, rect.top + 24); }
     else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activate(); }
-  } }, body, content);
+  } }, content, body);
 }
 function togglePaperSelection(id) { if (state.selectedPapers.has(id)) state.selectedPapers.delete(id); else state.selectedPapers.add(id); renderLibrary(); }
 function renderBulkbar(papers) {
@@ -145,4 +164,4 @@ function renderBulkbar(papers) {
 function renderLegend() {
   $("#if-legend").replaceChildren(...["top", "important", "other", "conference", "preprint"].map(tier => el("span", { class: `legend-tile legend-${tier}` }, TIER_NAMES[tier])));
 }
-function clearFilters() { closeFilterMenu(); state.query = ""; $("#search").value = ""; $$(".filter-group select:not(#sort)").forEach(s => { s.value = ""; }); renderLibrary(); }
+function clearFilters() { closeFilterMenu(); state.query = ""; $("#search").value = ""; $$('.filter-group select[id^="filter-"]').forEach(s => { s.value = ""; }); renderLibrary(); }

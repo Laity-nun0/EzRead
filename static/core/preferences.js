@@ -17,7 +17,8 @@ function applyPreferences() {
 function syncPreferenceControls() {
   $$('[data-preference]').forEach(control => { const key = control.dataset.preference; if (control.type === "checkbox") control.checked = Boolean(state.settings[key]); else control.value = state.settings[key] ?? DEFAULT_PREFERENCES[key]; });
   $$('[data-preference-output]').forEach(node => { node.textContent = `${state.settings[node.dataset.preferenceOutput]} px`; });
-  $$('[data-theme-choice]').forEach(node => { const chosen = node.dataset.themeChoice === state.settings.theme; node.classList.toggle("selected", chosen); node.setAttribute("aria-pressed", String(chosen)); });
+  const toggle = $("#theme-toggle"), dark = state.settings.theme === "graphite";
+  if (toggle) { toggle.setAttribute("aria-label", dark ? "切换到日间主题" : "切换到夜间主题"); toggle.replaceChildren(icon(dark ? "sun" : "moon")); }
   if (typeof syncSelectMenus === "function") syncSelectMenus();
 }
 function preferenceMessage(message, failed = false, keys = []) {

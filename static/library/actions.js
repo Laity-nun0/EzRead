@@ -79,10 +79,16 @@ function openCardMenu(p, x, y) {
   const menu = $("#card-context-menu");
   const item = (label, iconName, action) => el("button", { type: "button", role: "menuitem", onclick: () => { closeCardMenu(); action(); } },
     icon(iconName), el("span", {}, el("span", { class: "context-menu-label" }, label)));
+  const config = cardModelConfig(p), configText = config.model ? `${config.legacy ? "历史 Codex" : apiProviderLabel(config.provider)} · ${config.model}` : "API 模型待配置";
   menu.replaceChildren(
+    item("论文简介", "file", () => void act(() => openDetail(p.id))),
+    item(cardTranslationLabel(p), "translate", () => void act(() => openPdfLayoutSetup(p))),
+    item(configText, "settings", () => void act(() => openPaperModel(p))),
+    item("论文对话", "chat", () => void act(async () => { await openReader(p.id); await openPaperChat(); })),
     item("多选", "select", () => beginPaperSelection(p.id)),
     item("复制 PDF", "copy", () => void act(() => paperFileAction(p.id, "copy-pdf"))),
-    item("在文件夹显示", "folder", () => void act(() => paperFileAction(p.id, "reveal-pdf")))
+    item("在文件夹显示", "folder", () => void act(() => paperFileAction(p.id, "reveal-pdf"))),
+    item("永久删除", "trash", () => { if (confirm(`永久删除《${titleOf(p)}》及其文件、笔记、译文和全部会话？无法在应用内恢复。`)) void act(() => deletePapers([p.id])); })
   );
   menu.classList.remove("hidden");
   const box = menu.getBoundingClientRect();
