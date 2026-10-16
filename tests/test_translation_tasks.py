@@ -16,7 +16,6 @@ sys.path.insert(0, str(ROOT))
 import server
 import codex_bridge
 import codex_models
-import paper_ai
 
 PID = '0123456789abcdef'
 
@@ -62,209 +61,132 @@ class TranslationTests(unittest.TestCase):
             for key, value in [('translation_model', model), ('translation_reasoning_effort', effort)]:
                 con.execute('INSERT OR REPLACE INTO settings VALUES (?, ?)', (key, json.dumps(value)))
 
-    def unqueue(self):
-        server.QUEUED.clear()
-        while not server.JOBS.empty():
-            server.JOBS.get_nowait()
-            server.JOBS.task_done()
-
-    def run_translation(self, event=None, callback=None):
-        event = event or threading.Event()
-        def translate(con_factory, pid, doc, batch, config, thread_id, **kwargs):
-            if callback:
-                callback(batch, kwargs)
-            if kwargs.get('on_thread'):
-                kwargs['on_thread'](thread_id or 'mock-thread')
-            return thread_id or 'mock-thread', {b['id']: 'new ' + b['id'] for b in batch}
-        with patch.object(paper_ai, 'translate_batch', side_effect=translate) as model_call:
-            server.execute_translation(PID, event)
-        self.unqueue()
-        return model_call
-
-    def switch_model(self, model, effort='medium'):
-        with server.db() as con:
-            paper_ai.switch_model(con, PID, {'model': model, 'reasoning_effort': effort},
-                                  server.get_doc(PID), server.LIBRARY)
-
     def add_old_translations(self):
         self.doc['blocks'][0].update(translation='old manual p1', translation_manually_edited=True)
         self.doc['blocks'][1]['translation'] = 'old p2'
         self.doc['translation']['status'] = 'completed'
         server.put_doc(self.doc)
 
-    def test_defaults_are_frozen_when_queued(self):
-        server.enqueue(PID, 'translate')
-        task = copy.deepcopy(server.get_doc(PID)['translation'])
-        self.defaults()
-        call = self.run_translation()
-        self.assertEqual(call.call_args.args[4], {'model': 'model-a', 'reasoning_effort': 'medium'})
-        self.assertEqual(server.get_doc(PID)['translation']['run_id'], task['run_id'])
-
-    def test_legacy_partial_resume_does_not_relabel_old_text(self):
-        self.doc['blocks'][0]['translation'] = 'historic translation'
-        server.put_doc(self.doc)
-        server.enqueue(PID, 'translate', {'model': 'model-b', 'reasoning_effort': 'high'})
-        call = self.run_translation()
-        self.assertEqual([b['id'] for b in call.call_args.args[3]], ['p2'])
-        doc = server.get_doc(PID)
-        self.assertEqual(doc['blocks'][0]['translation'], 'historic translation')
-        self.assertNotIn('translation_run_id', doc['blocks'][0])
-        self.assertIsNone(server.public_doc(doc)['translation']['current_config'])
-        self.assertTrue(server.public_doc(doc)['translation']['current_mixed'])
-
-    def test_changed_config_requires_explicit_retranslation(self):
-        server.enqueue(PID, 'translate', {'model': 'model-a', 'reasoning_effort': 'low'})
-        self.unqueue()
+    def test_legacy_enqueue_is_rejected_without_model_or_data_change(self):
         before = server.get_doc(PID)
-        with self.assertRaisesRegex(ValueError, '重新翻译'):
-            server.enqueue(PID, 'translate', {'model': 'model-b', 'reasoning_effort': 'high'})
+        with patch.object(codex_models, 'resolve_config', side_effect=AssertionError('must stay local')):
+            with self.assertRaises(ValueError):
+                server.enqueue(PID, 'translate', {'retranslate': True})
         self.assertEqual(server.get_doc(PID), before)
+        self.assertFalse(server.QUEUED)
+        self.assertTrue(server.JOBS.empty())
 
-    def test_retranslation_stages_then_commits_and_restores_manual_version(self):
+    def test_stale_legacy_queue_job_cannot_execute_or_resume(self):
+        server.QUEUED.add((PID, 'translate'))
+        server.RESUME_REQUESTED.add((PID, 'translate'))
+        server.JOBS.put((PID, 'translate'))
+        server.JOBS.put(None)
+        with patch.object(codex_bridge, 'translate_selection', side_effect=AssertionError('must not call model')):
+            server.worker()
+        self.assertEqual(server.get_doc(PID), self.doc)
+        self.assertFalse(server.QUEUED)
+        self.assertFalse(server.RESUME_REQUESTED)
+        self.assertTrue(server.JOBS.empty())
+
+    def test_restart_retires_old_tasks_without_losing_source_or_drafts(self):
         self.add_old_translations()
-        server.enqueue(PID, 'translate', {'model': 'model-b', 'reasoning_effort': 'high', 'retranslate': True})
-        observed = []
-        def inspect_current(batch, kwargs):
-            observed.append([b['translation'] for b in server.get_doc(PID)['blocks']])
-        self.run_translation(callback=inspect_current)
-        self.assertEqual(observed, [['old manual p1', 'old p2']])
+        server.update_doc(PID, lambda d: d['translation'].update(
+            status='running', config={'model': 'retired-model', 'reasoning_effort': 'high'},
+            run_id='old-run', staging={'p1': 'saved chunk'}, thread_id='old-thread'))
+        before = server.get_doc(PID)
+        server.init_db()
+        after = server.get_doc(PID)
+        expected = copy.deepcopy(before)
+        expected.update(paper_type='journal', conference_name='', conference_abbr='', conference_track='unknown')
+        expected['translation'].update(status='retired', error='旧正文全文翻译已停用，历史译文和草稿已保留。')
+        self.assertEqual(after, expected)
+        self.assertTrue(server.JOBS.empty())
+        server.init_db()
+        self.assertEqual(server.get_doc(PID), after)
+
+    def test_restore_manual_version_preserves_source_annotations_and_pending_draft(self):
+        self.add_old_translations()
         doc = server.get_doc(PID)
-        self.assertEqual([b['translation'] for b in doc['blocks']], ['new p1', 'new p2'])
-        self.assertNotIn('staging', doc['translation'])
-        version = doc['translation_versions'][0]
-        self.assertIsNone(version['config'])
-        self.assertTrue(version['blocks']['p1']['translation_manually_edited'])
-        server.restore_translation(PID, version['id'])
+        doc['text_annotations'] = [{'id': 'annotation', 'note': 'keep range note'}]
+        server.archive_translation(doc)
+        version = copy.deepcopy(doc['translation_versions'][0])
+        doc['blocks'][0].update(translation='new manual edit', note='new note', text_override='corrected source')
+        doc['translation'].update(staging={'p1': 'valuable draft'}, config={'model': 'removed-model'})
+        server.put_doc(doc)
+        with patch.object(codex_models, 'resolve_config', side_effect=AssertionError('must stay local')):
+            server.restore_translation(PID, version['id'])
         restored = server.get_doc(PID)
         self.assertEqual(restored['blocks'][0]['translation'], 'old manual p1')
         self.assertTrue(restored['blocks'][0]['translation_manually_edited'])
-        self.assertEqual(restored['notes'], 'paper note')
-        self.assertEqual(restored['blocks'][0]['note'], 'first note')
+        self.assertEqual(restored['blocks'][0]['text'], self.doc['blocks'][0]['text'])
+        self.assertEqual(restored['blocks'][0]['text_override'], 'corrected source')
+        self.assertEqual(restored['blocks'][0]['note'], 'new note')
         self.assertTrue(restored['blocks'][0]['highlight'])
+        self.assertEqual(restored['text_annotations'], doc['text_annotations'])
+        self.assertEqual(restored['notes'], 'paper note')
+        self.assertEqual(restored['translation_drafts'][0]['task']['staging'], {'p1': 'valuable draft'})
+        self.assertEqual(restored['translation_versions'][-1]['blocks']['p1']['translation'], 'new manual edit')
         self.assertEqual(restored['translation']['status'], 'completed')
+        self.assertTrue(server.JOBS.empty())
 
-    def test_pause_restart_resumes_only_unfinished_staging(self):
+    def test_draft_recovery_does_not_require_live_model_or_replace_readable_text(self):
         self.add_old_translations()
-        server.enqueue(PID, 'translate', {'model': 'model-b', 'reasoning_effort': 'high', 'retranslate': True})
-        event = threading.Event()
-        with patch.object(server, 'batches', side_effect=lambda blocks: ([b] for b in blocks)):
-            self.run_translation(event, lambda batch, kwargs: event.set())
-        paused = server.get_doc(PID)
-        self.assertEqual(paused['translation']['status'], 'paused')
-        self.assertEqual(paused['translation']['staging'], {'p1': 'new p1'})
-        self.assertEqual(paused['blocks'][0]['translation'], 'old manual p1')
-        server.init_db()
-        self.defaults('model-a', 'low')
-        server.enqueue(PID, 'translate')
-        call = self.run_translation()
-        self.assertEqual([b['id'] for b in call.call_args.args[3]], ['p2'])
-        self.assertEqual(call.call_args.args[4]['model'], 'model-b')
-        self.assertEqual(server.get_doc(PID)['blocks'][0]['translation'], 'new p1')
-
-    def test_changing_paused_retranslation_archives_recoverable_draft(self):
-        self.add_old_translations()
-        server.enqueue(PID, 'translate', {'model': 'model-a', 'retranslate': True})
-        server.update_doc(PID, lambda d: d['translation'].update(staging={'p1': 'draft a'}, status='paused'))
-        self.unqueue()
-        self.switch_model('model-b')
-        server.enqueue(PID, 'translate', {'model': 'model-b', 'retranslate': True})
         doc = server.get_doc(PID)
-        self.assertEqual(doc['translation']['staging'], {})
-        self.assertEqual(doc['translation_drafts'][0]['task']['staging'], {'p1': 'draft a'})
-        self.assertEqual(doc['blocks'][0]['translation'], 'old manual p1')
-        self.unqueue()
-        server.restore_translation_draft(PID, doc['translation_drafts'][0]['id'])
-        recovered = server.get_doc(PID)['translation']
-        self.assertEqual(recovered['config']['model'], 'model-a')
-        self.assertEqual(recovered['staging'], {'p1': 'draft a'})
-        self.assertEqual(recovered['status'], 'paused')
+        doc['translation'].update(staging={'p1': 'draft a'}, config={'model': 'missing-model'}, run_id='old')
+        server.archive_translation_draft(doc)
+        draft = copy.deepcopy(doc['translation_drafts'][0])
+        doc['translation'].update(staging={'p2': 'draft b'})
+        server.put_doc(doc)
+        with patch.object(codex_models, 'resolve_config', side_effect=AssertionError('must stay local')):
+            server.restore_translation_draft(PID, draft['id'])
+        recovered = server.get_doc(PID)
+        self.assertEqual(recovered['translation']['staging'], {'p1': 'draft a'})
+        self.assertEqual(recovered['translation']['status'], 'retired')
+        self.assertEqual(recovered['translation']['config'], {'model': 'missing-model'})
+        self.assertEqual(recovered['translation_drafts'][-1]['task']['staging'], {'p2': 'draft b'})
+        self.assertEqual(recovered['blocks'], self.doc['blocks'])
+        self.assertTrue(server.JOBS.empty())
 
-    def test_active_task_cannot_be_replaced(self):
-        server.enqueue(PID, 'translate', {'model': 'model-a'})
-        original = server.get_doc(PID)
-        self.switch_model('model-b')
-        with self.assertRaisesRegex(ValueError, '暂停'):
-            server.enqueue(PID, 'translate', {'model': 'model-b', 'retranslate': True})
-        self.assertEqual(server.get_doc(PID), original)
-
-    def test_bad_batch_keeps_readable_version_and_no_partial_batch(self):
-        self.add_old_translations()
-        server.enqueue(PID, 'translate', {'retranslate': True})
-        with patch.object(paper_ai, 'translate_batch', return_value=('mock-thread', {'p1': 'incomplete'})):
-            with self.assertRaisesRegex(ValueError, '完整'):
-                server.execute_translation(PID, threading.Event())
-        doc = server.get_doc(PID)
-        self.assertEqual(doc['blocks'][0]['translation'], 'old manual p1')
-        self.assertEqual(doc['translation']['staging'], {})
-
-    def test_readable_edit_during_retranslation_is_archived_at_commit(self):
-        self.add_old_translations()
-        server.enqueue(PID, 'translate', {'retranslate': True})
-        def edit_during_batch(batch, kwargs):
-            server.update_doc(PID, lambda d: d['blocks'][0].update(translation='new manual edit', note='new note', translation_manually_edited=True))
-        self.run_translation(callback=edit_during_batch)
-        doc = server.get_doc(PID)
-        self.assertEqual(doc['translation_versions'][0]['blocks']['p1']['translation'], 'new manual edit')
-        self.assertEqual(doc['blocks'][0]['note'], 'new note')
+    def test_missing_history_recovery_leaves_document_unchanged(self):
+        before = server.get_doc(PID)
+        for restore in (server.restore_translation, server.restore_translation_draft):
+            with self.subTest(restore=restore.__name__), self.assertRaises(ValueError):
+                restore(PID, 'missing')
+            self.assertEqual(server.get_doc(PID), before)
 
     def test_public_document_does_not_leak_staging_or_versions_content(self):
         self.add_old_translations()
-        server.enqueue(PID, 'translate', {'retranslate': True})
-        server.update_doc(PID, lambda d: d['translation'].update(staging={'p1': 'SECRET DRAFT'}))
-        encoded = json.dumps(server.public_doc(server.get_doc(PID)))
+        doc = server.get_doc(PID)
+        server.archive_translation(doc)
+        doc['translation'].update(staging={'p1': 'SECRET DRAFT'}, status='retired')
+        server.archive_translation_draft(doc)
+        server.put_doc(doc)
+        public = server.public_doc(server.get_doc(PID))
+        encoded = json.dumps(public)
         self.assertNotIn('SECRET DRAFT', encoded)
         self.assertNotIn('old manual', encoded)
         self.assertNotIn('translation_runs', encoded)
-        self.assertTrue(server.public_doc(server.get_doc(PID))['translation']['has_staging'])
+        self.assertTrue(public['translation']['has_staging'])
 
-    def test_unavailable_model_does_not_mutate_task(self):
-        before = server.get_doc(PID)
-        with self.assertRaises(ValueError):
-            server.enqueue(PID, 'translate', {'model': 'missing-model'})
-        self.assertEqual(server.get_doc(PID), before)
-        self.assertFalse(server.QUEUED)
-
-    def test_checking_completed_translation_keeps_known_provenance(self):
-        server.enqueue(PID, 'translate', {'model': 'model-a', 'reasoning_effort': 'high'})
-        self.run_translation()
-        self.switch_model('model-b', 'low')
-        server.enqueue(PID, 'translate', {'model': 'model-b', 'reasoning_effort': 'low', 'retranslate': True})
-        self.run_translation()
-        old = server.get_doc(PID)['translation_versions'][0]
-        server.restore_translation(PID, old['id'])
-        server.enqueue(PID, 'translate')
-        call = self.run_translation()
-        call.assert_not_called()
-        current = server.public_doc(server.get_doc(PID))['translation']
-        self.assertEqual(current['current_config'], {'model': 'model-a', 'reasoning_effort': 'high'})
-        self.assertFalse(current['current_mixed'])
-
-    def test_restore_completed_version_preserves_pending_retranslation_draft(self):
-        server.enqueue(PID, 'translate', {'model': 'model-a'})
-        self.run_translation()
-        self.switch_model('model-b')
-        server.enqueue(PID, 'translate', {'model': 'model-b', 'retranslate': True})
-        self.run_translation()
-        old = server.get_doc(PID)['translation_versions'][0]
-        self.switch_model('model-a', 'high')
-        server.enqueue(PID, 'translate', {'model': 'model-a', 'reasoning_effort': 'high', 'retranslate': True})
-        server.update_doc(PID, lambda d: d['translation'].update(staging={'p1': 'valuable draft'}, status='paused'))
-        self.unqueue()
-        server.restore_translation(PID, old['id'])
-        doc = server.get_doc(PID)
-        self.assertEqual(doc['translation_drafts'][0]['task']['staging'], {'p1': 'valuable draft'})
-        self.assertNotIn('staging', doc['translation'])
-
-    def test_restart_marks_running_job_paused_without_losing_snapshot(self):
-        server.enqueue(PID, 'translate', {'model': 'model-b', 'reasoning_effort': 'high', 'retranslate': True})
-        server.update_doc(PID, lambda d: d['translation'].update(status='running', staging={'p1': 'saved chunk'}))
-        before = copy.deepcopy(server.get_doc(PID)['translation'])
-        server.init_db()
-        after = server.get_doc(PID)['translation']
-        self.assertEqual(after['status'], 'paused')
-        self.assertEqual(after['config'], before['config'])
-        self.assertEqual(after['run_id'], before['run_id'])
-        self.assertEqual(after['staging'], before['staging'])
+    def test_retired_http_routes_return_gone_without_login_or_enqueue(self):
+        listener = server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+        thread = threading.Thread(target=listener.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with patch.object(server, 'PORT', listener.server_port), \
+                    patch.object(server, 'codex_status', side_effect=AssertionError('must stay local')), \
+                    patch.object(server, 'enqueue', side_effect=AssertionError('must not enqueue')):
+                for action in ('translate', 'pause'):
+                    req = urllib.request.Request(f'http://127.0.0.1:{listener.server_port}/api/papers/{PID}/{action}',
+                                                 b'{}', {'Content-Type': 'application/json'}, method='POST')
+                    with self.subTest(action=action), self.assertRaises(urllib.error.HTTPError) as error:
+                        urllib.request.urlopen(req)
+                    self.assertEqual(error.exception.code, 410)
+            self.assertEqual(server.get_doc(PID), self.doc)
+        finally:
+            listener.shutdown()
+            thread.join(timeout=2)
+            listener.server_close()
 
     def test_reader_state_validation_and_independent_settings(self):
         state = {'version': 1, 'page': 2, 'original_offset': .5, 'translation_block_id': 'p2',
@@ -311,21 +233,21 @@ class TranslationTests(unittest.TestCase):
             con.execute('INSERT OR REPLACE INTO settings VALUES (?, ?)', ('selection_translation_model', json.dumps('model-a')))
         self.assertEqual(server.validate_settings({'selection_translation_reasoning_effort': 'low'}),
                          {'selection_translation_reasoning_effort': 'low'})
-        for invalid in ('unsupported', True, None, 123):
+        for invalid in ('x' * 161, True, None, 123):
             with self.subTest(value=invalid), self.assertRaises(ValueError):
                 server.validate_settings({'selection_translation_reasoning_effort': invalid})
         self.assertEqual(server.settings()['translation_model'], 'model-b')
         self.assertEqual(server.settings()['translation_reasoning_effort'], 'high')
 
-    def test_selection_http_uses_saved_model_and_reasoning(self):
+    def test_selection_http_uses_api_independently_of_legacy_preferences(self):
         httpd = server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         base = 'http://127.0.0.1:' + str(httpd.server_port)
         try:
             with patch.object(server, 'PORT', httpd.server_port), \
-                    patch.object(server, 'codex_status', return_value={'authenticated': True}), \
-                    patch.object(codex_bridge, 'translate_selection', return_value='模拟划线译文') as translate:
+                    patch.object(server, 'codex_status', side_effect=AssertionError('不得查登录')), \
+                    patch('ezread.selection_api.translate_selection', return_value='模拟划线译文') as translate:
                 for effort, expected in (('', 'medium'), ('high', 'high')):
                     settings = {'selection_translation_model': 'model-a', 'selection_translation_reasoning_effort': effort}
                     req = urllib.request.Request(base + '/api/settings', json.dumps(settings).encode(),
@@ -337,7 +259,7 @@ class TranslationTests(unittest.TestCase):
                         {'Content-Type': 'application/json'}, method='POST')
                     with urllib.request.urlopen(req) as response:
                         self.assertEqual(json.load(response)['translation'], '模拟划线译文')
-                    translate.assert_called_with('First synthetic paragraph.', model='model-a', reasoning_effort=expected, paper_id=PID)
+                    translate.assert_called_with(server, 'First synthetic paragraph.', paper_id=PID, cancel_event=server.SHUTDOWN)
                 self.assertFalse(server.get_doc(PID)['blocks'][0].get('translation'))
         finally:
             httpd.shutdown(); thread.join(timeout=2); httpd.server_close()
@@ -359,12 +281,11 @@ class TranslationTests(unittest.TestCase):
                 health = request('/api/health')
             self.assertEqual(health['app_root'], str(ROOT))
             self.assertEqual(health['data_dir'], str(self.folder))
-            with patch.object(codex_models, 'get', return_value={'models': []}) as get:
-                self.assertEqual(request('/api/models?refresh=1'), {'models': []})
-                get.assert_called_once_with(refresh=True)
-            with patch.object(server, 'codex_status', return_value={'available': True, 'authenticated': True}) as status:
-                self.assertTrue(request('/api/status?refresh=1')['codex']['authenticated'])
-                status.assert_called_once_with(force=True)
+            with patch.object(codex_models, 'get', side_effect=AssertionError('不得查目录')):
+                self.assertEqual(request('/api/models?refresh=1')['source'], 'local_settings')
+            with patch.object(server, 'codex_status', side_effect=AssertionError('不得查登录')):
+                self.assertFalse(request('/api/status?refresh=1')['configuration']['configured'])
+                self.assertNotIn('codex', request('/api/status'))
             server.update_doc(PID, lambda doc: doc.update(read_state='read'))
             self.assertNotIn('read_state', request('/api/papers/' + PID)['paper'])
             paper = request('/api/papers/' + PID, {'reader_state': {'page': 2, 'original_offset': .6, 'mode': 'parallel'}}, 'PATCH')['paper']

@@ -12,7 +12,7 @@
 
 保留逐刊编辑、调整等级和移除功能；新增可通过下方编程助手模块或 CLI/API 完成。名单自动检测并刷新。其他组只列出明确指定为其他的条目；未命中名单的期刊同样属于其他。ISSN 是稳定身份，须通过格式与校验位验证；更换 ISSN 应先移除旧条目再添加新条目。名称及别名不能与其他期刊冲突。
 
-Codex 文字修改接口仍可通过 HTTP 使用设置中的快速模型，仅发送名单与用户修改要求，生成预览后由调用方核对并通过 PATCH 应用。它不会联网核验政策或最新评级；身份信息不足时应补充 ISSN，不编造来源。生成、预览与保存共享同一校验模块，未应用的预览不会修改当前名单。
+文字修改接口通过 HTTP 使用共享 API 配置，仅发送名单与用户修改要求，生成预览后由调用方核对并通过 PATCH 应用，不依赖 Codex 登录。它不会联网核验政策或最新评级；身份信息不足时应补充 ISSN，不编造来源。生成、预览与保存共享同一校验模块，未应用的预览不会修改当前名单。
 
 保存自动生成 `data/journal-tier-history/` 历史 CSV，再原子替换名单。论文评级在公开接口中动态计算，因此已有论文、回收站论文、以后导入的论文均按新名单匹配，无需重新导入；原文、译文、笔记及阅读位置不变。当前界面保存后立即刷新，外部修改在下一次轮询刷新（窗口可见时约 6 秒）。直接编辑 CSV 出错时显示错误并继续使用本进程上次有效名单；重启后无有效个人名单时使用初始名单。修正文件后自动恢复。导出完整备份包含当前有效名单。
 
@@ -22,7 +22,7 @@ Codex 文字修改接口仍可通过 HTTP 使用设置中的快速模型，仅�
 
 - `GET /api/journal-catalogue`：返回 `rows`、`counts`、`revision`、`path`、`error`。
 - `PATCH /api/journal-catalogue`：提交 `{ "revision": "读取时的版本", "changes": [...] }`；旧版本返回 HTTP 409。
-- `POST /api/journal-catalogue/proposals`：提交 `{ "instruction": "修改要求" }`，后台生成 Codex 修改；`GET /api/journal-catalogue/proposals/<id>` 查询预览，仍通过 PATCH 应用。
+- `POST /api/journal-catalogue/proposals`：提交 `{ "instruction": "修改要求" }`，后台通过 AI API 生成修改预览；`GET /api/journal-catalogue/proposals/<id>` 查询预览，仍通过 PATCH 应用。
 - `python scripts/journal-catalogue.py list --query "RA-L"`：列出匹配记录及版本；可用 `--tier top` 筛选等级。
 - `python scripts/journal-catalogue.py apply changes.json`：应用 UTF-8 JSON 操作文件。`--data-dir` 放在子命令之前可指定独立库。
 

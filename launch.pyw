@@ -56,16 +56,15 @@ def _port_open():
 def running():
     """True only for this checkout and library; a different listener is an error."""
     expected = data_directory()
-    legacy = False
     try:
         try:
             status = _read_status('/api/health')
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 raise
-            # Old status responses can explain a conflict, but do not identify a checkout.
-            legacy = True
-            status = _read_status('/api/status')
+            # 旧 /api/status 可能启动 CLI；只凭健康接口不能确认身份时停止接管。
+            raise RuntimeError(f'{PORT} 端口上的服务运行的是旧版本或不兼容服务。\n'
+                               '请确认并关闭旧实例后重新打开；启动器不会查询旧账号状态或自动结束进程。') from None
     except (OSError, ValueError, urllib.error.URLError):
         if _port_open():
             raise RuntimeError(f'本机 {PORT} 端口已被其他服务占用或尚未正常响应。\n'
@@ -76,7 +75,7 @@ def running():
         raise RuntimeError(f'{PORT} 端口上的服务使用另一处文献库，未打开该服务。\n'
                            f'当前项目应使用：{expected}\n已运行服务使用：{found}\n'
                            '请确认并关闭旧实例后重新打开 EzRead；启动器不会自动结束进程。')
-    if legacy or not _same_path(status.get('app_root'), ROOT):
+    if not _same_path(status.get('app_root'), ROOT):
         raise RuntimeError(f'{PORT} 端口上的服务不是当前目录的 EzRead，或运行的是旧版本。\n'
                            f'当前程序目录：{ROOT}\n'
                            '请确认并关闭旧实例后重新打开；启动器不会自动结束进程。')

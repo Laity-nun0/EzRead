@@ -21,8 +21,9 @@ class LifecycleTests(unittest.TestCase):
         self.event = threading.Event()
         self.patches = [patch.object(server, 'DATA', self.folder), patch.object(server, 'LIBRARY', self.folder / 'library'),
                         patch.object(server, 'SHUTDOWN', threading.Event()), patch.object(server, 'INSTANCE_ID', 'a' * 32),
-                        patch.object(server, 'CANCEL', {(PID, 'translate'): self.event}), patch.object(server, 'RESUME_REQUESTED', {(PID, 'translate')}),
+                        patch.object(server, 'CANCEL', {(PID, 'pdf_translate'): self.event}), patch.object(server, 'RESUME_REQUESTED', {(PID, 'pdf_translate')}),
                         patch.object(server, 'JOBS', queue.Queue()), patch.object(server, 'STRUCTURE_JOBS', queue.Queue()),
+                        patch.object(server, 'AI_API', Mock()),
                         patch.object(server, 'SELECTION_REQUESTS', SelectionRequests())]
         for item in self.patches: item.start()
         self.addCleanup(self.temp.cleanup)
@@ -40,6 +41,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(server.SHUTDOWN.is_set())
         self.assertTrue(self.event.is_set())
         self.assertTrue(selection.is_set())
+        server.AI_API.close.assert_called_once_with()
         self.assertEqual(server.RESUME_REQUESTED, set())
         doc = server.get_doc(PID)
         self.assertEqual(doc['translation']['status'], 'paused')
@@ -64,7 +66,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertFalse(worker.is_alive())
         server.SHUTDOWN.set()
         with self.assertRaisesRegex(ValueError, '正在关闭'):
-            server.enqueue(PID, 'translate')
+            server.enqueue(PID, 'pdf_translate')
         self.assertTrue(server.JOBS.empty())
     def test_registry_stops_only_its_own_processes_and_prevents_late_spawns(self):
         owned, foreign = Mock(), Mock()

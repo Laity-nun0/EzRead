@@ -339,7 +339,8 @@ def main():
                         doc = json.loads(connection.execute('SELECT doc FROM papers WHERE id=?', ('0123456789abcdef',)).fetchone()[0])
                     assert doc['notes'] == f'{notes}，第 {len(saved_close["attempts"])} 次'
                     assert doc['blocks'][0]['text'] == 'Synthetic source.' and doc['blocks'][0]['translation'] == '已保存的测试译文'
-                    assert doc['translation']['status'] == 'paused'
+                    assert doc['translation']['status'] == 'retired'
+                    assert doc['pdf_layout_translation']['status'] == 'paused'
                     assert doc['translation']['staging']['one'] == '已保留的测试重译草稿'
                     assert (data / 'desktop-window.json').is_file(), 'Close did not preserve native window bounds.'
                     taskbar = [line for line in log_path.read_text(encoding='utf-8-sig').splitlines() if f'pid={window.pid} ' in line and 'taskbar-remove hwnd=' in line]

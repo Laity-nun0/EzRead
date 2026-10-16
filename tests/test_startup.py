@@ -16,6 +16,33 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class StartupTests(unittest.TestCase):
+    def test_javascript_mime_ignores_incorrect_system_mapping(self):
+        import threading
+        from http.server import ThreadingHTTPServer
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from ezread.web import handler_for
+
+        app = SimpleNamespace(VERSION='test', PORT=0, STATIC=ROOT / 'static', SHUTDOWN=threading.Event())
+        listener = ThreadingHTTPServer(('127.0.0.1', 0), handler_for(app))
+        app.PORT = listener.server_port
+        worker = threading.Thread(target=listener.serve_forever, daemon=True)
+        worker.start()
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with patch('mimetypes.guess_type', return_value=('text/plain', None)):
+                files = {'app.js': 'javascript', 'vendor/pdfjs/pdf.mjs': 'javascript',
+                         'vendor/pdfjs/pdf.worker.mjs': 'javascript', 'vendor/pdfjs/wasm/qcms_bg.wasm': 'application/wasm'}
+                for file, mime in files.items():
+                    with self.subTest(file=file), opener.open(f'http://127.0.0.1:{app.PORT}/static/{file}', timeout=3) as response:
+                        self.assertIn(mime, response.headers['Content-Type'])
+                        self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+                        self.assertEqual(response.read(), (app.STATIC / file).read_bytes())
+        finally:
+            listener.shutdown()
+            listener.server_close()
+            worker.join(timeout=3)
+
     def test_fresh_start_serves_all_modules_and_persists_settings(self):
         (ROOT / 'work').mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='startup-', dir=ROOT / 'work') as temp:

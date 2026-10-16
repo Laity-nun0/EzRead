@@ -6,6 +6,7 @@ async function importFiles(files) {
   try {
     const form = new FormData(); pdfs.forEach(file => form.append("files", file));
     const data = await api("/api/import", { method: "POST", body: form });
+    for (const paper of data.papers || []) if (paper.replaced_paper_id) clearDeletedPaperState(paper.replaced_paper_id);
     await loadLibrary(); setView("all");
     const count = (data.papers || []).length;
     if (count) toast(`已导入：${count} 篇论文`);

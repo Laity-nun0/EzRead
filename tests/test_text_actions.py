@@ -4,13 +4,15 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import urllib.request
 import urllib.error
 from http.server import ThreadingHTTPServer
 
 import server
 from ezread import text_actions as actions
+from ezread import selection_api
+from ezread.selection_requests import SelectionRequests
 import codex_bridge
 import codex_models
 import paper_ai
@@ -22,9 +24,19 @@ class TextActionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='text-actions-', dir=Path.cwd() / 'work')
         self.folder = Path(self.temp.name)
+        self.pool = Mock()
         self.patches = [patch.object(server, 'DATA', self.folder), patch.object(server, 'LIBRARY', self.folder / 'library'),
-                        patch.object(server, 'QUEUED', set()), patch.object(server, 'codex_status', return_value={'authenticated': True}),
-                        patch.object(codex_models, 'resolve_config', return_value={'model': 'mock', 'reasoning_effort': 'low'})]
+                        patch.object(server, 'QUEUED', set()), patch.object(server, 'SHUTDOWN', threading.Event()),
+                        patch.object(server, 'SELECTION_REQUESTS', SelectionRequests()),
+                        patch.object(server, 'AI_API', self.pool, create=True),
+                        patch.object(server, 'codex_status', side_effect=AssertionError('不得查询 Codex 登录')),
+                        patch.object(codex_models, 'resolve_config', side_effect=AssertionError('不得查询 Codex 目录')),
+                        patch.object(paper_ai, 'translate_batch', side_effect=AssertionError('不得写入问答代际')),
+                        patch.object(codex_bridge, 'translate_selection', side_effect=AssertionError('不得回退 CLI')),
+                        patch('ezread.api_settings.resolve_config', return_value={
+                            'provider': 'deepseek', 'base_url': 'https://example.invalid',
+                            'model': 'mock', 'max_output_tokens': 8192}),
+                        patch('ezread.api_settings.get_api_key', return_value='synthetic-key')]
         for item in self.patches: item.start()
         server.init_db()
         self.doc = {'id': PID, 'hash': 'immutable-pdf-hash', 'title': 'Synthetic selection test', 'deleted': False,
@@ -142,10 +154,11 @@ class TextActionTests(unittest.TestCase):
     def test_selected_translation_uses_validated_corrected_source(self):
         self.apply('revise', [self.selection(quote='First')], replacement='Changed')
         selected = self.selection(quote='Changed')
-        with patch.object(codex_bridge, 'translate_selection', return_value='模拟译文') as inference:
-            result = actions.translate(server, PID, {'ranges': [selected], 'selected_text': 'client cannot replace source'})
-        self.assertEqual(inference.call_args.args[0], 'Changed')
-        self.assertEqual(inference.call_args.kwargs['paper_id'], PID)
+        self.pool.request_json.return_value = {'translation': '模拟译文'}
+        result = actions.translate(server, PID, {'ranges': [selected], 'selected_text': 'client cannot replace source'})
+        self.assertEqual(self.pool.request_json.call_args.args[0], 'selection')
+        payload = json.loads(self.pool.request_json.call_args.args[4])
+        self.assertEqual(payload['selected_text'], 'Changed')
         self.assertEqual(result['translation'], '模拟译文')
 
     def test_dictionary_translation_never_checks_login_or_calls_model(self):
@@ -161,8 +174,9 @@ class TextActionTests(unittest.TestCase):
         selected = self.selection(quote='First')
         def revise_while_waiting(*args, **kwargs):
             self.apply('revise', [selected], replacement='Newer')
-            return 'stale result'
-        with patch.object(codex_bridge, 'translate_selection', side_effect=revise_while_waiting), self.assertRaises(actions.TextConflict):
+            return {'translation': 'stale result'}
+        self.pool.request_json.side_effect = revise_while_waiting
+        with self.assertRaises(actions.TextConflict):
             actions.translate(server, PID, {'ranges': [selected], 'selected_text': 'First'})
 
     def test_http_progress_is_visible_during_inference_and_retained_after_failure(self):
@@ -194,7 +208,7 @@ class TextActionTests(unittest.TestCase):
                 return json.load(response)
         with patch.object(server, 'PORT', listener.server_port), \
              patch.object(server, 'SELECTION_REQUESTS', SelectionRequests()), \
-             patch.object(codex_bridge, 'translate_selection', side_effect=model):
+             patch.object(selection_api, 'translate_selection', side_effect=model):
             host = threading.Thread(target=listener.serve_forever, daemon=True); host.start()
             worker = threading.Thread(target=post); worker.start()
             try:
@@ -218,19 +232,74 @@ class TextActionTests(unittest.TestCase):
 
     def test_retranslate_uses_revised_english_and_keeps_old_snapshot(self):
         self.apply('revise', [self.selection(quote='First')], replacement='Corrected')
-        with patch.object(paper_ai, 'translate_batch', return_value=('mock-thread', {'one': '完整的新译文'})) as inference:
-            doc = actions.retranslate(server, PID, {'ranges': [self.selection(quote='Corrected')]})
-        self.assertTrue(inference.call_args.args[3][0]['text'].startswith('Corrected'))
+        with server.db() as con:
+            history = con.execute('SELECT * FROM paper_ai_generations').fetchall()
+        self.pool.request_json.return_value = {'one': '完整的新译文'}
+        doc = actions.retranslate(server, PID, {'ranges': [self.selection(quote='Corrected')]})
+        self.assertEqual(self.pool.request_json.call_args.args[0], 'retranslate')
+        self.assertTrue(json.loads(self.pool.request_json.call_args.args[4])['blocks'][0]['text'].startswith('Corrected'))
+        with server.db() as con:
+            self.assertEqual(con.execute('SELECT * FROM paper_ai_generations').fetchall(), history)
         self.assertFalse(actions.review_needed(doc['blocks'][0]))
         self.assertEqual(doc['translation_versions'][-1]['blocks']['one']['translation'], self.doc['blocks'][0]['translation'])
 
     def test_retranslate_cannot_overwrite_a_concurrent_manual_translation(self):
         def concurrent(*args, **kwargs):
             server.update_doc(PID, lambda d: d['blocks'][0].update(translation='a new manual edit'))
-            return 'mock', {'one': 'stale model result'}
-        with patch.object(paper_ai, 'translate_batch', side_effect=concurrent), self.assertRaises(actions.TextConflict):
+            return {'one': 'stale model result'}
+        self.pool.request_json.side_effect = concurrent
+        with self.assertRaises(actions.TextConflict):
             actions.retranslate(server, PID, {'ranges': [self.selection()]})
         self.assertEqual(server.get_doc(PID)['blocks'][0]['translation'], 'a new manual edit')
+
+    def test_retranslate_cancel_and_invalid_response_preserve_translation_history(self):
+        data = {'ranges': [self.selection()], 'client_id': 'client-0123456789', 'request_id': 'request-0123456789'}
+        before = server.get_doc(PID)
+        def cancelled(*args, **kwargs):
+            server.SELECTION_REQUESTS.cancel(PID, data)
+            return {'one': '晚返回'}
+        self.pool.request_json.side_effect = cancelled
+        with self.assertRaises(codex_bridge.TranslationError) as caught:
+            actions.retranslate(server, PID, data)
+        self.assertEqual(caught.exception.code, 'cancelled')
+        self.assertEqual(server.get_doc(PID), before)
+        self.pool.request_json.side_effect = None
+        for response in ({}, {'foreign': '错误 ID'}, {'one': ''}, {'one': '译文', 'two': '额外单元'}):
+            self.pool.request_json.return_value = response
+            with self.subTest(response=response), self.assertRaises(codex_bridge.TranslationError):
+                actions.retranslate(server, PID, {'ranges': [self.selection()]})
+            self.assertEqual(server.get_doc(PID), before)
+
+    def test_retranslate_rejects_changed_source_deleted_block_and_edit_then_restore(self):
+        for mutation in ('source', 'removed', 'revision'):
+            server.put_doc(self.doc)
+            selected = self.selection()
+            def mutate(*args, **kwargs):
+                if mutation == 'source':
+                    server.update_doc(PID, lambda d: d['blocks'][0].update(text_override='new English'))
+                elif mutation == 'removed':
+                    server.update_doc(PID, lambda d: d['blocks'].pop(0))
+                else:
+                    self.apply('revise', [selected], replacement='temporary')
+                    record = server.get_doc(PID)['text_revision_history'][-1]
+                    self.apply('restore_revision', revision_id=record['id'])
+                return {'one': '旧结果'}
+            self.pool.request_json.side_effect = mutate
+            with self.subTest(mutation=mutation), self.assertRaises(actions.TextConflict):
+                actions.retranslate(server, PID, {'ranges': [selected]})
+            self.assertNotIn('translation_versions', server.get_doc(PID))
+
+    def test_selection_cancelled_late_api_result_is_not_returned(self):
+        data = {'ranges': [self.selection()], 'selected_text': 'sentence',
+                'client_id': 'client-0123456789', 'request_id': 'request-0123456789'}
+        def cancelled(*args, **kwargs):
+            server.SELECTION_REQUESTS.cancel(PID, data)
+            return {'translation': '晚返回'}
+        self.pool.request_json.side_effect = cancelled
+        with self.assertRaises(codex_bridge.TranslationError) as caught:
+            actions.translate(server, PID, data)
+        self.assertEqual(caught.exception.code, 'cancelled')
+        self.assertTrue(server.SELECTION_REQUESTS.snapshot(PID, data)['done'])
 
     def test_invalid_language_and_action_are_clean_validation_errors(self):
         with self.assertRaises(ValueError): self.apply('highlight', [{**self.selection(), 'language': []}])
@@ -244,18 +313,16 @@ class TextActionTests(unittest.TestCase):
         with self.assertRaises(actions.TextConflict): self.apply('edit_annotation', note='stale', **fields)
         self.assertEqual(server.get_doc(PID)['text_annotations'][0]['note'], 'after')
 
-    def test_full_retranslation_keeps_new_range_edit_and_staged_model_result(self):
-        doc = server.get_doc(PID)
-        server.prepare_translation(doc, {'retranslate': True, 'model': 'mock', 'reasoning_effort': 'low'})
-        server.put_doc(doc)
-        def concurrent(con_factory, pid, doc, batch, config, thread_id, **kwargs):
-            self.apply('revise', [self.selection(language='translation', quote='第一')], replacement='手动修订')
-            return 'mock-thread', {b['id']: 'stale model result' for b in batch}
-        with patch.object(paper_ai, 'translate_batch', side_effect=concurrent), self.assertRaisesRegex(ValueError, '未覆盖新内容'):
-            server.execute_translation(PID, threading.Event())
+    def test_range_revision_preserves_retired_full_translation_staging(self):
+        server.update_doc(PID, lambda d: d.update(translation={
+            'status': 'retired', 'staging': {'one': 'saved model result'}, 'run_id': 'old-run'}))
+        before = server.get_doc(PID)
+        self.apply('revise', [self.selection(language='translation', quote='第一')], replacement='手动修订')
         current = server.get_doc(PID)
         self.assertTrue(current['blocks'][0]['translation'].startswith('手动修订'))
-        self.assertEqual(current['translation']['staging']['one'], 'stale model result')
+        self.assertEqual(current['translation'], before['translation'])
+        self.assertEqual(current['blocks'][0]['text'], before['blocks'][0]['text'])
+        self.assertEqual(current['translation_versions'][-1]['blocks']['one']['translation'], before['blocks'][0]['translation'])
 
     def test_http_range_endpoint_checks_origin_and_exposes_conflict_as_409(self):
         listener = ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)

@@ -141,7 +141,7 @@ function journalCataloguePanel() {
     const scrollTop = resetScroll ? 0 : listNode.scrollTop;
     matches = searchJournalCatalogue(query ? catalogue.rows : catalogue.rows.filter(row => row.tier === navigationTier), query);
     searchStatus.textContent = query ? `全名单搜索 · ${matches.length} 本匹配期刊 · 按匹配程度排序` : "A–Z；# 为中文等其他刊名";
-    const empty = query ? "全部期刊中没有匹配结果。可尝试简称、别名或 ISSN。" : navigationTier === "other" ? "暂无明确列为其他等级的期刊。未列入名单的期刊也默认归为其他。" : `暂无${JOURNAL_CATALOGUE_TIERS[navigationTier]}期刊，可通过 Codex 调整名单或修改现有期刊等级。`;
+    const empty = query ? "全部期刊中没有匹配结果。可尝试简称、别名或 ISSN。" : navigationTier === "other" ? "暂无明确列为其他等级的期刊。未列入名单的期刊也默认归为其他。" : `暂无${JOURNAL_CATALOGUE_TIERS[navigationTier]}期刊，可通过 AI API 调整名单或修改现有期刊等级。`;
     rowsNode.replaceChildren(...(matches.length ? matches.map(row => catalogueRow(row)) : [el("p", { class: "small muted journal-catalogue-empty" }, empty)]));
     listNode.scrollTop = scrollTop;
     renderTierFilter(); updateIndex();

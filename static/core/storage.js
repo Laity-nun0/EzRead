@@ -44,3 +44,12 @@ function writeBrowserSetting(kind, value, storage) {
     return true;
   } catch { return false; }
 }
+
+function removePaperBrowserData(id, storage = localStorage) {
+  const keys = [];
+  for (let index = 0; index < storage.length; index++) {
+    const key = storage.key(index);
+    if (key?.startsWith("ezread-reader-") && key.endsWith(`:${id}`)) keys.push(key);
+  }
+  for (const key of keys) storage.removeItem(key);
+}

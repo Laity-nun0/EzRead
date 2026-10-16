@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from ezread.text_actions import original_text
 
 VERSION = 1
 ROLES = ('title', 'authors', 'affiliations', 'article_info', 'abstract',
@@ -21,8 +22,8 @@ def compact(text):
 
 
 def fingerprint(doc):
-    value = [(b['id'], b.get('text', ''), b.get('page'), b.get('bbox'), b.get('kind'),
-              b.get('is_formula'), b.get('is_table')) for b in doc.get('blocks', [])]
+    value = [(b['id'], original_text(b), b.get('page'), b.get('bbox'), b.get('kind'),
+              b.get('is_formula'), b.get('is_table'), b.get('extraction_hidden', False)) for b in doc.get('blocks', [])]
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
 
 
@@ -31,7 +32,9 @@ def box(b):
 
 
 def can_omit(b, doc=None):
-    text, q = b.get('text', '').strip(), box(b)
+    if b.get('extraction_hidden'):
+        return True
+    text, q = original_text(b).strip(), box(b)
     if b.get('note') or b.get('highlight') or b.get('translation_manually_edited'):
         return False
     repeated = False
@@ -46,7 +49,7 @@ def can_omit(b, doc=None):
 
 
 def heading(b):
-    text = b.get('text', '').strip()
+    text = original_text(b).strip()
     if len(text) > 180 or len(text.split()) > 22 or b.get('is_formula'):
         return False
     if _SECTIONS.fullmatch(text) and (text[:1].isupper() or text[:1].isdigit()):
@@ -63,7 +66,7 @@ def infer_roles(doc):
     title = compact(doc.get('title', ''))
     authors = [compact(name) for name in doc.get('authors', [])]
     for b in blocks:
-        text, key, q = b.get('text', '').strip(), compact(b.get('text', '')), box(b)
+        text, key, q = original_text(b).strip(), compact(original_text(b)), box(b)
         role = ('equation' if b.get('is_formula') else 'table' if b.get('is_table') else
                 'caption' if b.get('kind') == 'caption' else 'reference' if b.get('kind') == 'reference' else 'paragraph')
         if role == 'paragraph' and heading(b):
@@ -225,6 +228,8 @@ def candidates(doc):
     local = infer_roles(doc)
     result, size = [], 0
     for i, b in enumerate(blocks):
+        if b.get('extraction_hidden'):
+            continue
         if not (b.get('page') == 1 or heading(b) or b.get('kind') == 'heading' and len(b.get('text', '')) < 180):
             continue
         text = b.get('text', '')
@@ -238,12 +243,17 @@ def candidates(doc):
 
 
 def validate_roles(doc, selected, result):
+    if not isinstance(result, dict) or set(result) != {'roles'}:
+        raise ValueError('语义校对返回结构无效，已保留本地结构。')
     values = result.get('roles')
     if not isinstance(values, list):
         raise ValueError('语义校对未返回文本分类。')
     expected = {b['id'] for b in selected}
     roles, by_id = {}, {b['id']: b for b in doc.get('blocks', [])}
     for item in values:
+        if (not isinstance(item, dict) or set(item) != {'id', 'role'}
+                or not isinstance(item['id'], str) or not isinstance(item['role'], str)):
+            raise ValueError('语义校对返回无效文本分类，已保留本地结构。')
         bid, role = item.get('id'), item.get('role')
         if bid not in expected or bid in roles or role not in ROLES:
             raise ValueError('语义校对返回重复、未知 ID 或不支持的分类。')
@@ -258,12 +268,11 @@ def validate_roles(doc, selected, result):
 
 
 def refine(doc, config, *, runner=None, cancel_event=None):
-    if runner is None:
-        import codex_bridge
-        runner = codex_bridge._run_json
     selected = candidates(doc)
     if not selected:
         return organize(doc)
+    if runner is None:
+        raise ValueError('结构校对需要显式提供 API 调用器，未回退到 Codex。')
     root = Path(__file__).resolve().parents[1]
     instruction = ((root / 'SKILL.md').read_text(encoding='utf-8') + '\n\n' +
                    (root / 'references' / 'semantic.md').read_text(encoding='utf-8'))
@@ -289,9 +298,9 @@ def selection_source(doc, block_id, source_ids=None):
         raise ValueError('只能在同一自然段内连续划选。')
     by_id = {b['id']: b for b in doc.get('blocks', [])}
     selected = [by_id.get(bid) for bid in ids]
-    if any(not b or b.get('translation') or b.get('is_formula') or b.get('kind') == 'reference' for b in selected):
+    if any(not b or b.get('translation') or b.get('is_formula') or b.get('is_table') or b.get('kind') == 'reference' for b in selected):
         raise ValueError('只能在右侧尚未翻译的英文正文中划线。')
-    return ' '.join(b.get('text', '') for b in selected)
+    return ' '.join(original_text(b) for b in selected)
 
 
 if __name__ == '__main__':

@@ -32,10 +32,10 @@ codex_usage.get = codex_usage.snapshot = lambda **kwargs: {'status': 'unavailabl
 
 def execute(pid, event):
     event.wait(60)
-    server.update_doc(pid, lambda doc: doc['translation'].update(status='paused'))
+    server.update_doc(pid, lambda doc: doc['pdf_layout_translation'].update(status='paused'))
 
 
-server.execute_translation = execute
+server.execute_pdf_translation = execute
 OriginalHandler = server.Handler
 CLOSE_DELAY = int(os.environ.get('EZREAD_TEST_CLOSE_DELAY_MS', '0'))
 CLOSE_FAIL_ONCE = os.environ.get('EZREAD_TEST_CLOSE_FAIL_ONCE') == '1'
@@ -159,11 +159,13 @@ class Handler(OriginalHandler):
         process = codex_bridge.spawn([sys.executable, '-c', child], stdout=subprocess.PIPE,
                                      text=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         value = json.loads(process.stdout.readline())
-        event = server.CANCEL[(PID, 'translate')] = threading.Event()
+        event = server.CANCEL[(PID, 'pdf_translate')] = threading.Event()
         assert not event.is_set()
-        server.QUEUED.add((PID, 'translate'))
-        server.update_doc(PID, lambda doc: doc['translation'].update(status='running', staging={'one': '已保留的测试重译草稿'}))
-        server.JOBS.put((PID, 'translate'))
+        server.QUEUED.add((PID, 'pdf_translate'))
+        server.update_doc(PID, lambda doc: doc.update(
+            translation={'status': 'retired', 'staging': {'one': '已保留的测试重译草稿'}},
+            pdf_layout_translation={'status': 'running'}))
+        server.JOBS.put((PID, 'pdf_translate'))
         self.send_json({'child_pid': process.pid, **value})
 
 

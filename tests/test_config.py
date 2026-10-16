@@ -41,6 +41,23 @@ class ConfigurationTests(unittest.TestCase):
             with patch.dict(os.environ, {'EZREAD_CODEX_PATH': str(chosen), 'TUDU_CODEX_PATH': str(previous)}):
                 self.assertEqual(codex_bridge._cli(), str(chosen.resolve()))
 
+    def test_bridge_prefers_native_bundle_over_path_wrapper(self):
+        with tempfile.TemporaryDirectory() as temp:
+            local = Path(temp)
+            native = local / 'OpenAI' / 'Codex' / 'bin' / 'build' / 'codex.exe'
+            native.parent.mkdir(parents=True)
+            native.write_bytes(b'not an executable')
+            wrapper = str(local / 'npm' / 'codex')
+            with patch.dict(os.environ, {'LOCALAPPDATA': temp, 'EZREAD_CODEX_PATH': ''}), \
+                 patch.object(codex_bridge.shutil, 'which', side_effect=lambda name: wrapper if name == 'codex' else None):
+                self.assertEqual(codex_bridge._cli(), str(native))
+
+    def test_bridge_keeps_native_path_priority(self):
+        native = str(ROOT / 'work' / 'path-codex.exe')
+        with patch.dict(os.environ, {'EZREAD_CODEX_PATH': ''}), \
+             patch.object(codex_bridge.shutil, 'which', side_effect=lambda name: native if name == 'codex.exe' else None):
+            self.assertEqual(codex_bridge._cli(), native)
+
 
 if __name__ == '__main__':
     unittest.main()

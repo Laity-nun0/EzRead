@@ -1,144 +1,106 @@
 "use strict";
 
-// The model catalog is returned by the authenticated official CLI, never hard-coded.
-let modelCatalog = null, modelRequest = null;
-const modelCatalogListeners = new Set();
 const EFFORT_NAMES = { none: "不启用", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "更高", max: "最高", ultra: "极高" };
 function effortLabel(value) { return value ? `${EFFORT_NAMES[value] || value} · ${value}` : "模型默认"; }
-function configLabel(config) { return config?.model ? `${config.model} · 推理 ${effortLabel(config.reasoning_effort)}` : "历史模型未知"; }
-async function loadModels(refresh = false) {
-  if (modelRequest) return modelRequest;
-  modelRequest = api(`/api/models${refresh ? "?refresh=1" : ""}`).then(value => { modelCatalog = value; for (const render of modelCatalogListeners) render(); return value; }).finally(() => { modelRequest = null; });
-  return modelRequest;
-}
-function modelPicker(initial = {}, options = {}) {
-  const model = el("select", { "aria-label": options.modelLabel || "翻译模型" }), effort = el("select", { "aria-label": options.effortLabel || "推理强度" });
-  const message = el("p", { class: "model-catalog-status small muted", role: "status" }, "正在读取模型目录…");
-  const refresh = button(options.refreshLabel || "刷新模型目录", () => void update(true), "secondary");
-  const root = el("div", { class: "model-picker" }, el("div", { class: "inline-fields" }, field("模型", model), field("推理强度", effort)), el("div", { class: "model-catalog-footer" }, message, options.showRefresh === false ? null : refresh));
-  let desiredModel = initial.model || "", desiredEffort = initial.reasoning_effort || "", timer = null, disposed = false, disabled = false;
-  function updateEfforts() {
-    const entry = (modelCatalog?.models || []).find(x => x.model === (model.value || modelCatalog.default_model_id));
-    effort.replaceChildren(el("option", { value: "" }, entry?.default_reasoning_effort ? `模型默认 · ${effortLabel(entry.default_reasoning_effort)}` : "模型默认"), ...(entry?.supported_reasoning_efforts || []).map(value => el("option", { value }, effortLabel(value))));
-    if (desiredEffort && !entry?.supported_reasoning_efforts?.includes(desiredEffort)) effort.append(el("option", { value: desiredEffort, disabled: true }, `${desiredEffort}（当前模型不支持）`));
-    effort.value = desiredEffort;
-    effort.disabled = disabled || !entry;
-  }
-  function render() {
-    if (disposed) return;
-    const entries = modelCatalog?.models || [];
-    model.replaceChildren(el("option", { value: "" }, modelCatalog?.default_model_id ? `Codex 默认 · ${modelCatalog.default_model_id}` : "Codex 默认"), ...entries.map(entry => el("option", { value: entry.model }, entry.display_name || entry.model)));
-    if (desiredModel && !entries.some(x => x.model === desiredModel)) model.append(el("option", { value: desiredModel, disabled: true }, `${desiredModel}（目录中暂不可用）`));
-    model.value = desiredModel; model.disabled = disabled || !entries.length; updateEfforts();
-    message.textContent = modelCatalog?.error || (modelCatalog?.refreshing ? entries.length ? "已有目录可用，正在后台更新…" : "正在刷新模型目录…" : modelCatalog?.status === "stale" ? "当前为缓存目录" : entries.length ? "" : "模型目录暂不可用，请刷新后重试。" );
-    message.classList.toggle("error-text", !entries.length && !modelCatalog?.refreshing);
-    // Settings refreshes call loadModels directly. Every catalog notification
-    // must schedule completion polling, even after the picker's initial load.
-    if (modelCatalog?.refreshing && timer === null) {
-      timer = setTimeout(() => { timer = null; if (!disposed && root.isConnected && modelCatalog?.refreshing) void update(); }, 1200);
-    } else if (!modelCatalog?.refreshing) { clearTimeout(timer); timer = null; }
-  }
-  model.addEventListener("change", () => { desiredModel = model.value; desiredEffort = ""; updateEfforts(); options.onChange?.({ model: desiredModel, reasoning_effort: desiredEffort }); });
-  effort.addEventListener("change", () => { desiredEffort = effort.value; options.onChange?.({ model: desiredModel, reasoning_effort: desiredEffort }); });
-  async function update(force = false) {
-    if (disposed) return;
-    refresh.disabled = true;
-    try { await loadModels(force); if (disposed) return; render(); }
-    catch (error) { message.textContent = `模型目录读取失败：${error.message}`; message.classList.add("error-text"); }
-    finally { refresh.disabled = false; }
-  }
-  if (modelCatalog) render();
-  modelCatalogListeners.add(render);
-  void update();
-  return { root, value: () => ({ model: model.value, reasoning_effort: effort.value }), setConfig(value) { desiredModel = value.model || ""; desiredEffort = value.reasoning_effort || ""; render(); }, disable(value) { disabled = value; render(); }, ready: () => Boolean(modelCatalog?.models?.length), dispose() { disposed = true; clearTimeout(timer); modelCatalogListeners.delete(render); } };
-}
-
-function defaultTranslationPanel(selection = false) {
-  const modelKey = selection ? "selection_translation_model" : "translation_model";
-  const effortKey = selection ? "selection_translation_reasoning_effort" : "translation_reasoning_effort";
-  const picker = modelPicker({ model: state.settings[modelKey], reasoning_effort: state.settings[effortKey] }, {
-    modelLabel: selection ? "划线翻译模型" : "翻译模型", effortLabel: selection ? "划线翻译推理强度" : "推理强度",
-    showRefresh: false,
-    onChange: value => { changePreference({ [modelKey]: value.model, [effortKey]: value.reasoning_effort }, true); renderLibrary(); }
-  });
-  $("#settings-dialog").addEventListener("close", () => picker.dispose(), { once: true });
-  return el("section", { class: `settings-section ${selection ? "selection-translation-defaults" : "translation-defaults"}` },
-    el("h3", {}, selection ? "划线翻译" : "全文翻译默认配置"), picker.root, preferenceSaveHint([modelKey, effortKey]));
-}
-
-function openPaperModel(p) {
-  const locked = p.paper_ai || {};
-  const picker = modelPicker({ model: locked.model || state.settings.translation_model,
-                              reasoning_effort: locked.reasoning_effort || state.settings.translation_reasoning_effort });
-  const note = el("p", { class: "small muted" }, locked.model
-    ? `当前：${configLabel(locked)}` : "模型尚未固定");
-  const save = button("应用于本篇论文", event => act(async () => {
-    if (!picker.ready()) throw new Error("模型目录尚不可用，请刷新后重试。");
-    const result = await api(`/api/papers/${encodeURIComponent(p.id)}/ai/model`,
-      { method: "POST", body: picker.value() });
-    const target = state.papers.find(item => item.id === p.id);
-    if (target) target.paper_ai = result.paper_ai;
-    if (state.reader?.id === p.id) state.reader.paper_ai = result.paper_ai;
-    renderLibrary(); closeDialog("#translation-dialog");
-    toast(result.paper_ai.generation > (locked.generation || 1) ? "已新建论文对话" : "论文模型已固定");
-  }, event.currentTarget), "primary");
-  $("#translation-content").replaceChildren(el("div", { class: "dialog-heading" },
-    el("h2", {}, "本篇论文的模型"), iconButton("close", "关闭", () => closeDialog("#translation-dialog"))),
-    el("p", { class: "translation-paper-title" }, titleOf(p)), note, picker.root,
-    el("div", { class: "form-actions" }, button("取消", () => closeDialog("#translation-dialog")), save));
-  openDialog("#translation-dialog");
-  $("#translation-dialog").addEventListener("close", () => picker.dispose(), { once: true });
-}
-
-function openTranslationSetup(papers) {
-  const ids = papers.map(p => p.id), single = papers.length === 1 ? papers[0] : null;
-  const existing = papers.some(p => translationOf(p).config || translationOf(p).done || DONE_STATUSES.has(translationOf(p).status) || cardTranslationLabel(p) === "已翻译");
-  const completed = single && cardTranslationLabel(single) === "已翻译";
-  const picker = modelPicker({ model: single?.paper_ai?.model || state.settings.translation_model,
-    reasoning_effort: single?.paper_ai?.reasoning_effort || state.settings.translation_reasoning_effort });
-  const retranslate = el("input", { type: "checkbox", checked: Boolean(completed), "aria-label": "使用新配置整篇重新翻译" });
-  const hint = el("p", { class: "translation-choice-hint small muted" });
-  const start = button("加入翻译队列", event => act(async () => {
-    const value = picker.value();
-    if ((!existing || retranslate.checked) && !picker.ready()) throw new Error("模型目录尚不可用，请先刷新。");
-    const errors = []; let added = 0, skipped = 0;
-    for (const id of ids) {
-      const p = state.papers.find(item => item.id === id), t = translationOf(p || {});
-      if (ACTIVE_STATUSES.has(t.status)) { errors.push("正在运行的任务需先暂停"); continue; }
-      if (cardTranslationLabel(p) === "已翻译" && !retranslate.checked) { skipped++; continue; }
-      const preserve = Boolean(t.config) && !retranslate.checked;
-      try {
-        const selected = p?.paper_ai?.model ? { model: p.paper_ai.model,
-          reasoning_effort: p.paper_ai.reasoning_effort } : value;
-        const payload = preserve ? {} : { ...selected, ...(retranslate.checked ? { retranslate: true } : {}) };
-        await api(`/api/papers/${encodeURIComponent(id)}/translate`, { method: "POST", body: payload }); added++;
-      } catch (error) { errors.push(error.message); }
-    }
-    await loadLibrary();
-    if (single && state.detail?.id === single.id && $("#detail-dialog").open) { state.detail = normalizeDetail(await api(`/api/papers/${encodeURIComponent(single.id)}`)); renderDetail(); }
-    if (state.reader && ids.includes(state.reader.id)) await refreshReader();
-    if (!errors.length && added) closeDialog("#translation-dialog");
-    else if (!errors.length && skipped) hint.textContent = "所选论文已译完";
-    else hint.textContent = `${errors.length} 篇未加入：${errors[0]}`;
-    if (added) toast(`已加入翻译队列：${added} 篇${skipped ? `，跳过已译完 ${skipped} 篇` : ""}`);
-    if (errors.length) toast(errors[0], "error", 7000);
-  }, event.currentTarget), "primary", "translate");
-  let previousResumeMode = null;
+function configLabel(config) { if (config?.provider) return `${apiProviderLabel(config.provider)} · ${config.model} · 输出上限 ${config.max_output_tokens}${config.thinking === "disabled" ? " · 思考关闭" : config.thinking === "enabled" ? ` · 思考开启 · ${effortLabel(config.reasoning_effort)}` : ""}`; return config?.model ? `${config.model} · 推理 ${effortLabel(config.reasoning_effort)}` : "历史模型未知"; }
+async function openPdfLayoutSetup(p) {
+  const task = pdfLayoutOf(p), current = task.current, active = ACTIVE_STATUSES.has(task.status);
+  const legacyTask = Boolean(task.config && !task.config.provider);
+  const settings = await loadTranslationApiSettings();
+  const currentConfig = deepSeekFeature(settings, "translation");
+  const picker = apiTranslationPicker(settings, currentConfig, false, true);
+  const glossary = el("textarea", { rows: 5, "aria-label": "本篇术语（每行原文=译文）", placeholder: "例如：grain boundary=晶界" });
+  const seed = pdfGlossaryEntries(task);
+  const latestGlossary = task.glossary?.entries || seed;
+  const seedText = latestGlossary.map(item => `${item.source}=${item.target}`).join("\n");
+  glossary.value = seedText;
+  const retranslate = el("input", { type: "radio", name: "pdf-task-mode", value: "new", checked: Boolean(legacyTask || current && task.status === "completed"), disabled: legacyTask, "aria-label": "使用新配置重新生成版式译文" });
+  const resume = el("input", { type: "radio", name: "pdf-task-mode", value: "resume", checked: !retranslate.checked, disabled: legacyTask || task.status === "completed", "aria-label": "继续已有任务" });
+  const summary = el("p", { class: "small muted translation-config-summary" }, active ? "任务正在进行" : "确认后加入翻译队列");
+  const originalConfig = el("p", { class: "translation-resume-config" });
+  const modeHint = el("p", { class: "small muted" });
+  const glossaryCount = el("summary", {}, `本篇术语 · ${latestGlossary.length} 条`);
+  const glossaryPanel = el("details", { class: "translation-glossary" }, glossaryCount, field("本篇术语（每行 原文=译文）", glossary));
+  const message = el("p", { class: "small muted", role: "status" }, "正在检查本地版式组件…");
+  let available = false;
+  const start = button("确认保留版式翻译", event => act(async () => {
+    if (!available) throw Error(message.textContent);
+    const preserve = Boolean(task.config?.provider) && !retranslate.checked;
+    if (!preserve && !picker.ready()) throw Error("请先在设置 → 翻译保存 API Key。");
+    const payload = preserve ? { ...task.config, glossary: seed } : { ...picker.value(), glossary: parseApiGlossary(glossary.value), ...(legacyTask || retranslate.checked ? { retranslate: true } : {}) };
+    await pdfLayoutRequest(p, "pdf-translate", payload); closeDialog("#translation-dialog"); toast("已加入保留版式翻译队列");
+  }, event.currentTarget), "primary", "translate", { disabled: true });
+  let previousResumeMode = null, editedConfig = null, editedGlossary = null;
   function updateMode() {
-    const resumeOnly = single && translationOf(single).config && !retranslate.checked;
-    if (previousResumeMode !== Boolean(resumeOnly)) picker.setConfig(resumeOnly ? translationOf(single).config : single?.paper_ai?.model
-      ? { model: single.paper_ai.model, reasoning_effort: single.paper_ai.reasoning_effort }
-      : { model: state.settings.translation_model, reasoning_effort: state.settings.translation_reasoning_effort });
-    previousResumeMode = Boolean(resumeOnly);
-    picker.disable(Boolean(resumeOnly || single?.paper_ai?.model));
-    start.textContent = retranslate.checked ? "确认整篇重译" : existing ? "确认继续翻译" : "确认开始全文翻译";
-    hint.textContent = "";
+    const resumeOnly = Boolean(task.config?.provider && !retranslate.checked);
+    if (previousResumeMode !== resumeOnly) {
+      if (previousResumeMode === false) { editedConfig = picker.value(); editedGlossary = glossary.value; }
+      picker.setConfig(resumeOnly && task.config.provider ? task.config : editedConfig || currentConfig);
+      glossary.value = !resumeOnly && editedGlossary !== null ? editedGlossary : (resumeOnly ? seed : latestGlossary).map(item => `${item.source}=${item.target}`).join("\n");
+    }
+    previousResumeMode = resumeOnly;
+    picker.disable(resumeOnly); glossary.disabled = resumeOnly; picker.root.hidden = resumeOnly; picker.advanced.hidden = resumeOnly;
+    originalConfig.hidden = !resumeOnly;
+    originalConfig.replaceChildren(el("strong", {}, "沿用原任务配置"), el("span", {}, configLabel(task.config)), el("span", { class: "small muted" }, "原缓存保留"));
+    modeHint.textContent = resumeOnly ? "继续使用原配置与术语，可复用已有缓存。" : "新版本完成前，已有译文保持可读；原任务与缓存保留。";
+    resume.checked = !retranslate.checked;
+    glossaryCount.textContent = `本篇术语 · ${glossary.value.split(/\r?\n/).filter(line => line.trim()).length} 条`;
+    start.disabled = !available || active;
+    start.textContent = legacyTask ? "使用 API 重新生成，保留旧草稿" : retranslate.checked ? "生成新版本" : task.config ? "继续翻译" : "开始翻译";
   }
   retranslate.addEventListener("change", updateMode);
-  const content = el("div", {}, el("div", { class: "dialog-heading" }, el("h2", {}, single ? "确认全文翻译" : `确认批量翻译 · ${papers.length} 篇`), iconButton("close", "关闭翻译设置", () => closeDialog("#translation-dialog"))), single ? el("p", { class: "translation-paper-title" }, titleOf(single)) : null, single && existing ? el("p", { class: "small muted" }, `原任务配置：${configLabel(translationOf(single).config)}`) : null, existing ? el("label", { class: "translation-mode-choice" }, retranslate, "使用新配置整篇重新翻译") : null, hint, picker.root, el("div", { class: "form-actions" }, button("取消", () => closeDialog("#translation-dialog")), start));
-  $("#translation-content").replaceChildren(content); updateMode(); openDialog("#translation-dialog");
-  $("#translation-dialog").addEventListener("close", () => picker.dispose(), { once: true });
+  resume.addEventListener("change", () => { retranslate.checked = false; updateMode(); });
+  picker.root.addEventListener("change", updateMode);
+  glossary.addEventListener("input", () => { glossaryCount.textContent = `本篇术语 · ${glossary.value.split(/\r?\n/).filter(line => line.trim()).length} 条`; });
+  updateMode();
+  const contextPanel = el("details", { class: "translation-context" }, el("summary", {}, "任务与组件详情"), message,
+    el("p", { class: "small muted" }, pdfLayoutSubmissionText(task)),
+    task.error ? el("p", { class: "error-text" }, asText(task.error)) : null,
+    el("p", { class: "small muted" }, "请对照原 PDF 核对译文与版面。"));
+  const body = el("div", { class: "translation-confirm-body" },
+    el("p", { class: "translation-paper-title" }, titleOf(p)),
+    task.config || current ? el("section", { class: "translation-task-mode" }, el("h3", {}, "任务方式"), el("div", { class: "translation-mode-options" }, el("label", {}, resume, "继续已有任务"), el("label", {}, retranslate, "生成新版本")), modeHint) : null,
+    legacyTask ? el("p", { class: "small muted" }, "历史 Codex 任务须使用 API 生成新版本，保留旧草稿。") : null,
+    el("section", { class: "translation-model-section" }, el("h3", {}, "翻译模型"), originalConfig, picker.root),
+    el("div", { class: "translation-options" }, glossaryPanel, picker.advanced),
+    task.config || current || task.versions?.length || task.drafts?.length ? button("版本与草稿", () => openPdfLayoutVersions(p), "subtle") : null,
+    el("p", { class: "small muted translation-privacy" }, "论文文字与本篇术语将发送至所选供应商；PDF 排版在本机完成。"),
+    contextPanel,
+    current?.quality === "needs_review" ? el("p", { class: "translation-review" }, "当前译文有待核对内容，请对照原 PDF。") : null);
+  $("#translation-content").replaceChildren(el("div", { class: "translation-confirm" },
+    el("div", { class: "dialog-heading translation-confirm-heading" }, el("h2", {}, "翻译确认"), iconButton("close", "关闭版式翻译设置", () => closeDialog("#translation-dialog"))), body,
+    el("div", { class: "translation-confirm-footer" }, summary, el("div", { class: "translation-footer-actions" }, button("取消", () => closeDialog("#translation-dialog")), active ? button("暂停翻译", event => act(async () => { await pdfLayoutRequest(p, "pdf-pause"); closeDialog("#translation-dialog"); }, event.currentTarget), "secondary") : start))));
+  openDialog("#translation-dialog");
+  const dialog = $("#translation-dialog"); let closed = false;
+  dialog.addEventListener("close", () => { closed = true; picker.dispose(); }, { once: true });
+  try {
+    const engine = await api("/api/pdf-layout"); if (closed) return;
+    available = Boolean(engine.available); message.textContent = engine.message || (available ? `${engine.engine} ${engine.version} · 本地组件已就绪` : "本地版式组件尚未准备");
+    if (!available) { contextPanel.open = true; message.classList.add("error-text"); }
+    updateMode();
+  } catch (error) { if (!closed) { message.textContent = `本地版式组件不可用：${error.message}`; contextPanel.open = true; message.classList.add("error-text"); updateMode(); } }
 }
+function openPdfLayoutVersions(p) {
+  const task = pdfLayoutOf(p), current = task.current, active = ACTIVE_STATUSES.has(task.status);
+  const versions = el("div", { class: "pdf-layout-versions" }, (task.versions || []).map(version => el("div", { class: "translation-version" },
+    el("div", {}, el("strong", {}, `${timeLabel(version.created_at)} · ${configLabel(version.config)}`), el("p", { class: "small muted" }, `${version.page_count || 0} 页 · ${version.quality === "needs_review" ? "需要核对" : "通过版式检查"}`)),
+    button(current?.id === version.id ? "当前版本" : "恢复此版式版本", event => act(async () => {
+      await pdfLayoutRequest(p, "pdf-restore", { version_id: version.id }); closeDialog("#translation-dialog"); toast("已恢复版式译文版本");
+    }, event.currentTarget), "secondary", "", { disabled: active || current?.id === version.id }))));
+  const drafts = el("div", { class: "pdf-layout-drafts" }, (task.drafts || []).map(draft => el("div", { class: "translation-version" },
+    el("div", {}, el("strong", {}, `${timeLabel(draft.created_at)} · ${configLabel(draft.config)}`), el("p", { class: "small muted" }, `${draft.stage || "未完成"} · ${pdfLayoutProgressText(draft)}`)),
+    button("恢复未完成草稿", event => act(async () => {
+      await pdfLayoutRequest(p, "pdf-resume-draft", { draft_id: draft.id }); closeDialog("#translation-dialog"); toast(draft.config?.provider ? "版式草稿已恢复为暂停任务，请确认后继续翻译" : "历史草稿已保留，请使用 API 重新生成");
+    }, event.currentTarget), "secondary", "", { disabled: active }))));
+  $("#translation-content").replaceChildren(el("div", { class: "translation-confirm" },
+    el("div", { class: "dialog-heading translation-confirm-heading" }, el("h2", {}, "版式译文版本与草稿"), iconButton("close", "关闭版式译文版本", () => closeDialog("#translation-dialog"))),
+    el("div", { class: "translation-confirm-body" }, el("h3", {}, "版式译文版本"), task.versions?.length ? versions : el("p", { class: "muted" }, "尚无历史版本"), el("h3", {}, "未完成草稿"), task.drafts?.length ? drafts : el("p", { class: "muted" }, "尚无未完成草稿")),
+    el("div", { class: "translation-confirm-footer" }, button("返回翻译确认", () => act(() => openPdfLayoutSetup(p)), "secondary"))));
+  openDialog("#translation-dialog");
+}
+function defaultTranslationPanel() { return apiTranslationSettingsPanel(); }
+
+function openPaperModel() { return openSettings("chat"); }
 
 async function openTranslationVersions(p) {
   const data = await api(`/api/papers/${encodeURIComponent(p.id)}/translation-versions`);
@@ -152,7 +114,7 @@ async function openTranslationVersions(p) {
     closeDialog("#translation-dialog"); toast("已恢复译文版本");
   }, event.currentTarget), "secondary") : null));
   if (data.drafts?.length) body.append(el("h3", { class: "settings-section" }, "未完成的重译草稿"));
-  for (const draft of data.drafts || []) body.append(el("div", { class: "translation-version" }, el("div", {}, el("strong", {}, configLabel(draft.config)), el("p", { class: "small muted" }, `${draft.block_count || 0} 段已保存 · 尚未完成`)), button("恢复为待续译任务", event => act(async () => {
+  for (const draft of data.drafts || []) body.append(el("div", { class: "translation-version" }, el("div", {}, el("strong", {}, configLabel(draft.config)), el("p", { class: "small muted" }, `${draft.block_count || 0} 段已保存 · 尚未完成`)), button("恢复历史草稿存档", event => act(async () => {
     await api(`/api/papers/${encodeURIComponent(p.id)}/translation-resume-draft`, { method: "POST", body: { draft_id: draft.id } });
     await loadLibrary();
     if (state.reader?.id === p.id) await refreshReader();

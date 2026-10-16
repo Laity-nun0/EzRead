@@ -11,8 +11,9 @@ import unittest
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from ezread import api_settings
 from ezread import journal_catalogue as catalogue
 import codex_bridge
 import server
@@ -104,21 +105,124 @@ class JournalCatalogueTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(catalogue.classify(self.data, {'journal': self.row['name']})['tier'], 'important')
 
-    def test_codex_proposal_is_validated_without_saving_until_applied(self):
-        app = SimpleNamespace(DATA=self.data, settings=lambda: {'selection_translation_model': 'mock-model'})
-        config = {'model': 'mock-model', 'reasoning_effort': 'low'}
-        for response, expected in (({'summary': '降为重要', 'changes': [self.change()]}, 'ready'),
+    def api_app(self, response):
+        api_settings.save_settings(self.data, {'provider': 'deepseek', 'api_key': 'journal-test-key'})
+        return SimpleNamespace(DATA=self.data, AI_API=Mock(request_json=Mock(return_value=response)),
+                               SHUTDOWN=threading.Event())
+
+    def wait_proposal(self, app, instruction='修改名单'):
+        job = catalogue.start_proposal(app, instruction)
+        deadline = time.monotonic() + 2
+        while job['status'] == 'running' and time.monotonic() < deadline:
+            time.sleep(.005)
+            job = catalogue.proposal(self.data, job['id'])
+        self.assertNotEqual(job['status'], 'running', '提案线程未在测试期限内完成')
+        return job
+
+    def test_api_proposal_is_validated_without_saving_until_applied(self):
+        change = {'action': 'upsert', **self.row, 'tier': 'important', 'basis': '用户自定义等级'}
+        for response, expected in (({'summary': '降为重要', 'changes': [change]}, 'ready'),
                                    ({'summary': '缺少 ISSN', 'changes': []}, 'ready'),
-                                   ({'summary': '错误', 'changes': [{'action': 'delete', 'issn': '0000-0000'}]}, 'failed')):
-            with patch('codex_models.resolve_config', return_value=config), \
-                 patch.object(codex_bridge, 'propose_journal_changes', return_value=response):
-                job = catalogue.start_proposal(app, '修改名单')
-                deadline = time.monotonic() + 2
-                while job['status'] == 'running' and time.monotonic() < deadline:
-                    time.sleep(.005)
-                    job = catalogue.proposal(self.data, job['id'])
+                                   ({'summary': '错误', 'changes': [{'action': 'delete', **self.row,
+                                                                  'issn': '0000-0000'}]}, 'failed')):
+            with self.subTest(response=response):
+                app = self.api_app(response)
+                with patch.object(codex_bridge, 'propose_journal_changes', side_effect=AssertionError('CLI forbidden')), \
+                     patch('codex_models.resolve_config', side_effect=AssertionError('catalogue forbidden')):
+                    job = self.wait_proposal(app)
                 self.assertEqual(job['status'], expected)
+                self.assertEqual(job['base_revision'], self.before['revision'])
+                self.assertEqual(job['model'], api_settings.resolve_config(self.data))
+                call = app.AI_API.request_json.call_args
+                self.assertEqual(call.args[0], 'journal')
+                self.assertEqual(call.kwargs['cancel_event'], app.SHUTDOWN)
+                self.assertEqual(call.args[3], catalogue.JOURNAL_INSTRUCTION)
+                payload = json.loads(call.args[4])
+                self.assertEqual(payload['USER_REQUEST'], '修改名单')
+                self.assertEqual(payload['CATALOGUE'], self.before['rows'])
+                self.assertEqual(payload['OUTPUT_SCHEMA'], catalogue.JOURNAL_CHANGE_SCHEMA)
+                self.assertNotIn('journal-test-key', json.dumps(job))
                 self.assertFalse(catalogue.catalogue_path(self.data).exists())
+                self.assertFalse((self.data / 'journal-tier-history').exists())
+
+    def test_missing_key_and_shutdown_do_not_register_jobs(self):
+        app = SimpleNamespace(DATA=self.data, AI_API=Mock(), SHUTDOWN=threading.Event())
+        with self.assertRaisesRegex(ValueError, 'API Key'):
+            catalogue.start_proposal(app, '修改名单')
+        app = self.api_app({'summary': '', 'changes': []})
+        app.SHUTDOWN.set()
+        with self.assertRaisesRegex(ValueError, '关闭'):
+            catalogue.start_proposal(app, '修改名单')
+        app.AI_API.request_json.assert_not_called()
+        with catalogue._LOCK:
+            self.assertFalse(any(job['scope'] == str(self.data.resolve()) for job in catalogue._JOBS.values()))
+
+    def test_invalid_api_payloads_and_cancelled_response_never_change_catalogue(self):
+        for response in ([], {}, {'summary': 2, 'changes': []}, {'summary': '', 'changes': None},
+                         {'summary': '', 'changes': [self.change()]},
+                         {'summary': '', 'changes': [], 'api_key': 'unexpected'}):
+            with self.subTest(response=response):
+                self.assertEqual(self.wait_proposal(self.api_app(response))['status'], 'failed')
+        app = self.api_app({'summary': 'cancelled', 'changes': []})
+        def cancel(*args, **kwargs):
+            app.SHUTDOWN.set()
+            return {'summary': 'cancelled', 'changes': []}
+        app.AI_API.request_json.side_effect = cancel
+        job = self.wait_proposal(app)
+        self.assertEqual(job['status'], 'failed')
+        self.assertIn('取消', job['error'])
+        self.assertEqual(catalogue.snapshot(self.data)['revision'], self.before['revision'])
+        self.assertFalse(catalogue.catalogue_path(self.data).exists())
+
+    def test_api_errors_are_redacted_and_no_automatic_retry_occurs(self):
+        app = self.api_app(None)
+        app.AI_API.request_json.side_effect = RuntimeError('failed with journal-test-key')
+        job = self.wait_proposal(app)
+        self.assertEqual(job['status'], 'failed')
+        self.assertNotIn('journal-test-key', json.dumps(job))
+        app.AI_API.request_json.assert_called_once()
+
+    def test_ready_proposal_requires_explicit_apply_and_history_contains_only_csv(self):
+        app = self.api_app({'summary': '降为重要', 'changes': [
+            {'action': 'upsert', **self.row, 'tier': 'important', 'basis': '用户自定义等级'}]})
+        job = self.wait_proposal(app)
+        self.assertEqual(job['status'], 'ready')
+        self.assertEqual(catalogue.snapshot(self.data)['revision'], self.before['revision'])
+        saved = catalogue.apply_changes(self.data, job['changes'], job['base_revision'])
+        self.assertEqual(saved['changed'], 1)
+        self.assertEqual(catalogue.classify(self.data, {'journal': self.row['name']})['tier'], 'important')
+        self.assertEqual(len(list((self.data / 'journal-tier-history').glob('*.csv'))), 1)
+        for path in [catalogue.catalogue_path(self.data), *(self.data / 'journal-tier-history').glob('*.csv')]:
+            self.assertNotIn('journal-test-key', path.read_text(encoding='utf-8-sig'))
+
+    def test_proposal_keeps_config_snapshot_and_stale_apply_is_rejected(self):
+        app = self.api_app({'summary': '降级', 'changes': [{'action': 'upsert', **self.row,
+                                                      'tier': 'important'}]})
+        entered, release = threading.Event(), threading.Event()
+        response = app.AI_API.request_json.return_value
+        def delayed(*args, **kwargs):
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return response
+        app.AI_API.request_json.side_effect = delayed
+        job = catalogue.start_proposal(app, '修改名单')
+        try:
+            self.assertTrue(entered.wait(2))
+            api_settings.save_settings(self.data, {'provider': 'deepseek', 'model': 'changed-model'})
+            with self.assertRaisesRegex(ValueError, '已有名单修改'):
+                catalogue.start_proposal(app, '第二次修改')
+            catalogue.apply_changes(self.data, [self.change('other')], self.before['revision'])
+        finally:
+            release.set()
+        deadline = time.monotonic() + 2
+        while job['status'] == 'running' and time.monotonic() < deadline:
+            time.sleep(.005)
+            job = catalogue.proposal(self.data, job['id'])
+        self.assertEqual(job['status'], 'ready')
+        self.assertEqual(job['model']['model'], 'deepseek-flash')
+        with self.assertRaises(catalogue.CatalogueConflict):
+            catalogue.apply_changes(self.data, job['changes'], job['base_revision'])
+        self.assertEqual(catalogue.classify(self.data, {'journal': self.row['name']})['tier'], 'other')
 
     def test_http_edits_refresh_papers_reject_cross_origin_and_stale_writes(self):
         with patch.object(server, 'DATA', self.data), patch.object(server, 'LIBRARY', self.data / 'library'):
@@ -151,6 +255,20 @@ class JournalCatalogueTests(unittest.TestCase):
                     with self.assertRaises(urllib.error.HTTPError) as cross:
                         request('/api/journal-catalogue', 'PATCH', body, 'https://example.com')
                     self.assertEqual(cross.exception.code, 403)
+                    app = self.api_app({'summary': '无需修改', 'changes': []})
+                    with patch.object(server, 'AI_API', app.AI_API), patch.object(server, 'SHUTDOWN', app.SHUTDOWN), \
+                         patch.object(codex_bridge, 'propose_journal_changes', side_effect=AssertionError('CLI forbidden')):
+                        job = request('/api/journal-catalogue/proposals', 'POST', {'instruction': '检查名单'})
+                        deadline = time.monotonic() + 2
+                        while job['status'] == 'running' and time.monotonic() < deadline:
+                            time.sleep(.005)
+                            job = request('/api/journal-catalogue/proposals/' + job['id'])
+                        self.assertEqual(job['status'], 'ready')
+                        self.assertEqual(job['model']['provider'], 'deepseek')
+                        self.assertNotIn('journal-test-key', json.dumps(job))
+                        self.assertEqual(app.AI_API.request_json.call_args.args[0], 'journal')
+                        self.assertEqual(job['base_revision'], catalogue.snapshot(self.data)['revision'])
+
             finally:
                 httpd.shutdown(); httpd.server_close(); thread.join(timeout=3)
 

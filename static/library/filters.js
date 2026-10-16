@@ -67,7 +67,7 @@ function renderNav() {
   $$(".nav-item[data-view]").forEach(n => { if (n.dataset.view === "queue") { const open = $("#queue-dialog").open; n.classList.toggle("active", open); n.setAttribute("aria-expanded", String(open)); n.removeAttribute("aria-current"); return; } const active = n.dataset.view === state.view && (n.dataset.view !== "all" || !$("#filter-type").value); n.classList.toggle("active", active); if (active) n.setAttribute("aria-current", "page"); else n.removeAttribute("aria-current"); });
   $$("[data-filter-type]").forEach(n => { const active = n.dataset.filterType === $("#filter-type").value; n.classList.toggle("active", active); n.setAttribute("aria-pressed", String(active)); });
   $(".nav-item[data-view='favorites']")?.setAttribute("aria-pressed", String(state.view === "favorites"));
-  const active = state.papers.filter(p => ACTIVE_STATUSES.has(translationOf(p).status)).length;
+  const active = state.papers.filter(p => ACTIVE_STATUSES.has(p.pdf_layout_translation?.status) || ACTIVE_STATUSES.has(p.summarize_status)).length;
   $("#queue-count").textContent = active; $("#queue-count").classList.toggle("hidden", !active);
 }
 function setView(view, collection = "") {
@@ -85,7 +85,6 @@ function toggleView(view, collection = "") {
 function openQueue() {
   if (!$("#queue-dialog").open) queueLibraryScroll = window.scrollY;
   renderQueue(); renderUsagePanels(); openDialog("#queue-dialog"); renderNav();
-  void act(refreshStatus); void loadUsage(false);
 }
 function filteredPapers() {
   const q = state.query.toLowerCase().trim(), journal = $("#filter-journal").value, tier = $("#filter-tier").value, type = $("#filter-type").value;

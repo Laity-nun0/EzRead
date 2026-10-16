@@ -11,8 +11,11 @@ from typing import ContextManager
 
 
 class ApplicationContext(Protocol):
+    AI_API: Any
+    API_USAGE: Any
     CANCEL: dict[tuple[str, str], Event]
     DATA: Path
+    DELETED_PAPERS: set[str]
     DEFAULT_SETTINGS: dict[str, Any]
     FILE_ACTION_LOCK: ContextManager[Any]
     JOBS: Queue[tuple[str, str]]
@@ -38,13 +41,13 @@ class ApplicationContext(Protocol):
     archive_translation: Callable[..., Any]
     archive_translation_draft: Callable[..., Any]
     attach_desktop: Callable[..., Any]
-    batches: Callable[..., Any]
     codex_status: Callable[..., Any]
     commit_import_result: Callable[..., Any]
     db: Callable[..., Any]
+    delete_paper: Callable[..., Any]
     enqueue: Callable[..., Any]
     enrich_publication: Callable[..., Any]
-    execute_translation: Callable[..., Any]
+    execute_pdf_translation: Callable[..., Any]
     get_doc: Callable[..., Any]
     import_pdf: Callable[..., Any]
     init_db: Callable[..., Any]
@@ -53,11 +56,13 @@ class ApplicationContext(Protocol):
     now: Callable[..., Any]
     paper_file_action: Callable[..., Any]
     patch_paper_fields: Callable[..., Any]
-    prepare_translation: Callable[..., Any]
+    prepare_pdf_translation: Callable[..., Any]
     prepare_shutdown: Callable[..., Any]
     public_doc: Callable[..., Any]
     put_doc: Callable[..., Any]
     restore_translation: Callable[..., Any]
+    restore_pdf_translation: Callable[..., Any]
+    restore_pdf_translation_draft: Callable[..., Any]
     restore_translation_draft: Callable[..., Any]
     schedule_structure: Callable[..., Any]
     settings: Callable[..., Any]

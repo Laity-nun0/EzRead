@@ -48,12 +48,12 @@ class LauncherTests(unittest.TestCase):
         with patch.object(launch, '_read_status', return_value={'app_root': str(ROOT), 'data_dir': str(expected)}):
             self.assertTrue(launch.running())
 
-    def test_fallback_identifies_legacy_without_accepting_it(self):
+    def test_legacy_health_never_falls_back_to_login_status(self):
         missing = urllib.error.HTTPError(launch.URL, 404, 'not found', None, None)
         with patch.object(launch, '_read_status', side_effect=[missing, {'data_dir': str(ROOT / 'data')}]) as read:
             with self.assertRaisesRegex(RuntimeError, '旧版本'):
                 launch.running()
-        self.assertEqual([call.args[0] for call in read.call_args_list], ['/api/health', '/api/status'])
+        self.assertEqual([call.args[0] for call in read.call_args_list], ['/api/health'])
 
     def test_free_port_allows_start(self):
         with patch.object(launch, '_read_status', side_effect=OSError('connection refused')), \

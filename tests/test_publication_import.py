@@ -305,7 +305,11 @@ class EnrichmentTests(unittest.TestCase):
     def test_import_never_calls_external_metadata_even_if_doi_present(self):
         extracted = {'metadata': {'title': TITLE, 'doi': '10.1109/JSEN.2024.3471812'},
             'pages': [{'number': 1}], 'blocks': [], 'figures': []}
-        with patch('pdf_tools.extract_document', return_value=extracted), \
+        def extract(source, assets):
+            (assets / 'original.pdf').write_bytes(source.read_bytes())
+            (assets / 'page-001.jpg').write_bytes(b'synthetic page')
+            return copy.deepcopy(extracted)
+        with patch('pdf_tools.extract_document', side_effect=extract), \
              patch.object(publication, '_read') as request, \
              patch('urllib.request.urlopen', side_effect=AssertionError('Import must not fetch remote metadata')) as transport:
             result = server.import_pdf(b'%PDF-1.7 mocked', 'test.pdf')
@@ -427,13 +431,22 @@ class EnrichmentTests(unittest.TestCase):
                 extracted = {'metadata': metadata, 'pages': [{'number': 1}], 'blocks': copy.deepcopy(self.doc['blocks']), 'figures': []}
                 item = crossref_item(title=[title], DOI=f'10.1234/workflow-{index}', type='proceedings-article',
                     **{'container-title': [venue], 'author': [{'given': 'Alice', 'family': 'Brown'}, {'given': 'Bob', 'family': 'Smith'}]})
-                with patch('pdf_tools.extract_document', return_value=extracted), patch.object(publication, '_read') as request:
+                def extract(source, assets):
+                    (assets / 'original.pdf').write_bytes(source.read_bytes())
+                    (assets / 'page-001.jpg').write_bytes(b'synthetic page')
+                    return copy.deepcopy(extracted)
+                with patch('pdf_tools.extract_document', side_effect=extract), patch.object(publication, '_read') as request:
                     imported = server.import_pdf(f'%PDF-1.7 workflow-{index}'.encode(), f'conference-{index}.pdf')
                     request.assert_not_called()
                 self.assertEqual(imported['conference_abbr'], acronym)
                 self.assertEqual(imported['collection'], '')
                 before_blocks = server.get_doc(imported['id'])['blocks']
-                with patch.object(publication, '_read', return_value={'message': {'items': [item]}}):
+                with patch.object(publication, '_read', return_value={'message': {'items': [item]}}), \
+                        patch('pdfplumber.open') as open_pdf, patch('pdf_tools._lines', return_value=lines):
+                    pdf = open_pdf.return_value.__enter__.return_value
+                    pdf.metadata = {}
+                    pdf.pages[0].height = 800
+                    pdf.pages[0].extract_text.return_value = ''
                     server.enrich_publication(imported['id'], {'consent': True})
                 stored = server.get_doc(imported['id'])
                 self.assertEqual(stored['paper_type'], 'conference')

@@ -1,12 +1,6 @@
 // Composition: polling, event wiring and application startup.
-let selectionPreparation = null;
-function prepareSelectionSession() {
-  if (!selectionPreparation) selectionPreparation = api("/api/selection-session", { method: "POST", body: {} })
-    .catch(() => null); // Keep the library usable; a requested translation can retry preparation.
-  return selectionPreparation;
-}
 function paperSignature(p) {
-  const t = translationOf(p); return JSON.stringify([p.updated_at, p.text_actions_revision, t.status, t.done, t.total, t.error, p.summarize_status, p.summary, p.overview_sections, p.structure_status, p.structure_error, p.collection, p.collection_assignment, p.journal_tier, p.tier_needs_review, p.paper_type, p.conference_name, p.conference_abbr]);
+  const t = translationOf(p), pdf = p.pdf_layout_translation; return JSON.stringify([p.updated_at, p.text_actions_revision, t.status, t.done, t.total, t.error, pdf?.status, pdf?.stage, pdf?.done, pdf?.total, pdf?.received, pdf?.review_pending, pdf?.rejected, pdf?.reused, pdf?.model_calls, pdf?.warnings, pdf?.error, pdf?.run_id, pdf?.current?.id, pdf?.versions?.map(v => v.id), pdf?.drafts, p.summarize_status, p.summary, p.overview_sections, p.structure_status, p.structure_error, p.collection, p.collection_assignment, p.journal_tier, p.tier_needs_review, p.paper_type, p.conference_name, p.conference_abbr]);
 }
 async function poll() {
   if (state.pollBusy || state.importing || document.hidden) return;
@@ -21,7 +15,13 @@ async function poll() {
     const focusedInput = document.activeElement && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
     const readerSummary = state.papers.find(p => p.id === readerId), detailSummary = state.papers.find(p => p.id === detailId);
     if ($("#reader-dialog").open && readerSummary) {
-      state.reader.translation = readerSummary.translation; updateReaderProgress();
+      state.reader.translation = readerSummary.translation;
+      if (readerSummary.pdf_layout_translation) {
+        const previous = state.reader.pdf_layout_translation?.current;
+        const next = readerSummary.pdf_layout_translation.current;
+        state.reader.pdf_layout_translation = { ...readerSummary.pdf_layout_translation, current: next ? previous || null : null };
+      }
+      updateReaderProgress();
       if (state.readerRenderedSignature !== paperSignature(readerSummary)) await refreshReader();
     }
     if ($("#detail-dialog").open && detailSummary && !$("#reader-dialog").open && !focusedInput && !$("#detail-collection-menu")?.matches(":popover-open") && !$("#edit-dialog").open && !$("#crop-dialog").open && state.detailRenderedSignature !== paperSignature(detailSummary)) {
@@ -53,7 +53,7 @@ function installEvents() {
   $("#search").addEventListener("focus", () => closeFilterMenu());
   $("#import-top").addEventListener("click", () => { closeFilterMenu(); $("#file-input").click(); });
   $("#file-input").addEventListener("change", event => act(() => importFiles(event.target.files)));
-  $$(".nav-item[data-view]").forEach(node => node.addEventListener("click", () => { if (node.dataset.view === "all") clearFilters(); toggleView(node.dataset.view); }));
+  $$(".nav-item[data-view]").forEach(node => node.addEventListener("click", () => { if (node.dataset.view === "all") clearFilters(); toggleView(node.dataset.view); if (node.dataset.view === "queue") void refreshStatus().catch(() => {}); }));
   $$("[data-filter-type]").forEach(node => node.addEventListener("click", () => {
     $("#filter-type").value = node.dataset.filterType;
     if (node.dataset.filterType !== "journal") { $("#filter-journal").value = ""; $("#filter-tier").value = ""; }
@@ -88,7 +88,7 @@ function installEvents() {
     if (activeCardMenuId) { event.preventDefault(); event.stopPropagation(); closeCardMenu(true); }
     else if (state.selectionMode && !$("dialog[open]") && !activeFilterTrigger && !draggingPaperIds.length) { event.preventDefault(); cancelPaperSelection(); }
   });
-  $("#refresh-status").addEventListener("click", event => act(async () => { await refreshStatus(); await loadLibrary(); toast("已更新连接与任务状态"); }, event.currentTarget));
+  $("#refresh-status").addEventListener("click", event => act(async () => { await refreshStatus(); await loadLibrary(); renderQueue(); toast("已更新任务状态"); }, event.currentTarget));
   $$('[data-close]').forEach(node => node.addEventListener("click", () => closeDialog(`#${node.dataset.close}`)));
   $("#queue-close").addEventListener("click", () => closeDialog("#queue-dialog"));
   $("#queue-dialog").addEventListener("close", () => { renderLibrary(); requestAnimationFrame(() => { if (!$("#queue-dialog").open) window.scrollTo({ top: queueLibraryScroll }); }); });
@@ -109,17 +109,14 @@ async function init() {
   try { const cached = JSON.parse(readBrowserSetting("preferences") || "null"); if (cached && typeof cached === "object") for (const key of Object.keys(DEFAULT_PREFERENCES)) if (Object.hasOwn(cached, key)) state.settings[key] = cached[key]; } catch {}
   applyPreferences(); installEvents(); const sort = readBrowserSetting("sort"), direction = readBrowserSetting("direction"); if (sort) $("#sort").value = sort; if (direction) $("#sort-direction").value = direction;
   renderLibrary();
-  api("/api/status").then(value => { state.status = value; if (value.usage) state.usage = value.usage; if ($("#queue-dialog").open) renderQueue(); $("#settings-codex-status")?.replaceChildren(codexStatusPanel()); renderUsagePanels(); }).catch(error => { state.status = { ...(state.status || {}), codex: { available: null, authenticated: null, message: `连接状态查询失败：${error.message}` } }; if ($("#queue-dialog").open) renderQueue(); $("#settings-codex-status")?.replaceChildren(codexStatusPanel()); });
-  loadUsage(false);
+  void refreshStatus().catch(() => {});
   const results = await Promise.allSettled([api("/api/settings"), api("/api/papers")]);
   if (results[0].status === "fulfilled") state.settings = { ...state.settings, ...results[0].value };
   applyPreferences();
-  if (results[1].status === "fulfilled") { state.papers = results[1].value.papers || []; state.collections = list(results[1].value.collections); state.loading = false; renderLibrary(); void prepareSelectionSession(); }
+  if (results[1].status === "fulfilled") { state.papers = results[1].value.papers || []; state.collections = list(results[1].value.collections); state.loading = false; renderLibrary(); }
   else {
     state.loading = false; $("#result-count").textContent = "连接未完成"; $("#paper-grid").replaceChildren(el("div", { class: "no-results", style: { columnSpan: "all" } }, el("h3", {}, "暂时无法打开本地文献库"), el("p", { class: "small" }, results[1].reason.message), button("重新连接", () => act(() => loadLibrary(true)), "primary", "", { style: { marginTop: "17px" } }))); toast("请确认 EzRead 本地服务正在运行", "error", 7000);
   }
-  void loadModels().then(renderLibrary).catch(() => {});
   pollTimer = setInterval(poll, 6000);
-  usagePollTimer = setInterval(() => { if (!document.hidden && $("#queue-dialog").open) loadUsage(false); }, 60000);
 }
 init().catch(error => toast(error.message, "error", 9000));

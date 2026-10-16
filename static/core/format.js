@@ -3,15 +3,12 @@ function translationOf(p) { return p.translation || { status: "idle", done: 0, t
 function statusName(value) { return STATUS_NAMES[value] || value || "尚未翻译"; }
 function taskStatusName(value) { return ({ queued: "排队中", pending: "等待处理", running: "进行中", completed: "已完成", complete: "已完成", failed: "未完成", error: "未完成", paused: "已暂停" })[value] || value || "尚未开始"; }
 function cardTranslationLabel(p) {
-  const t = translationOf(p);
-  return Number(t.total) > 0 && Number(t.current_done) >= Number(t.total) ? "已翻译" : "全文翻译";
+  return p.pdf_layout_translation?.current ? "版式译文" : "保留版式翻译";
 }
 function cardModelConfig(p) {
-  const locked = p.paper_ai || {};
-  const model = locked.model || state.settings.translation_model || modelCatalog?.default_model_id;
-  const entry = modelCatalog?.models?.find(item => item.model === model);
-  const effort = locked.model ? locked.reasoning_effort : state.settings.translation_reasoning_effort || entry?.default_reasoning_effort;
-  return { model, effort, locked: Boolean(locked.model), legacyTranslation: !locked.model && Number(translationOf(p).current_done) > 0 };
+  const locked = p.paper_ai || {}, defaults = state.status?.configuration || {};
+  return { provider: locked.provider || (locked.model ? null : defaults.provider),
+    model: locked.model || defaults.model || "", locked: Boolean(locked.provider), legacy: Boolean(locked.model && !locked.provider) };
 }
 function paperType(p) { return Object.hasOwn(PAPER_TYPES, p.paper_type) ? p.paper_type : "journal"; }
 function journalNameOf(p) { return String(p.journal || p.journal_abbr || "").trim().replace(/\s+(?:19|20)\d{2}(?:[.,]\d+)?(?::\s*[\w.-]+)?\s*$/u, "").trim(); }
@@ -35,7 +32,6 @@ function importedAt(p) { return dateMs(p.created_at || p.imported_at); }
 function safeUrl(url) { if (typeof url !== "string" || !url.trim()) return ""; try { const parsed = new URL(url, location.href); return ["http:", "https:"].includes(parsed.protocol) ? parsed.href : ""; } catch { return ""; } }
 function imageNode(src, attrs = {}) { const url = safeUrl(src); return url ? el("img", { src: url, loading: "lazy", alt: "论文插图", ...attrs }) : placeholderImage(); }
 function placeholderImage() { return el("div", { class: "paper-no-image" }, icon("image"), "等待选择封面"); }
-function ratio(p) { const t = translationOf(p); return Math.max(0, Math.min(100, Number(t.total) ? Number(t.done || 0) / Number(t.total) * 100 : 0)); }
 function tierOf(p) { const tier = p.journal_tier; return Object.hasOwn(TIER_NAMES, tier) ? tier : paperType(p) === "conference" ? "conference" : paperType(p) === "preprint" ? "preprint" : "other"; }
 function rankAppearance(p) {
   return { type: paperType(p), tier: tierOf(p) };

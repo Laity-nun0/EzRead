@@ -21,14 +21,18 @@ def pause_jobs(app):
         for event in app.CANCEL.values():
             event.set()
         app.SELECTION_REQUESTS.shutdown()
+        app.AI_API.close()
         for doc in app.all_docs():
             if not (doc.get('translation', {}).get('status') in ('running', 'queued') or
+                    doc.get('pdf_layout_translation', {}).get('status') in ('running', 'queued') or
                     any(doc.get(name + '_status') in ('running', 'queued') for name in ('summarize', 'team')) or
                     doc.get('reading_structure', {}).get('status') in ('running', 'queued')):
                 continue
             def pause(current):
                 if current.get('translation', {}).get('status') in ('running', 'queued'):
                     current['translation'].update(status='paused', error='')
+                if current.get('pdf_layout_translation', {}).get('status') in ('running', 'queued'):
+                    current['pdf_layout_translation'].update(status='paused', stage='翻译已暂停', error='')
                 for name in ('summarize', 'team'):
                     if current.get(name + '_status') in ('running', 'queued'):
                         current.update({name + '_status': 'paused', name + '_error': ''})

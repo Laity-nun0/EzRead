@@ -13,6 +13,8 @@ from pathlib import Path
 from ezread.config import VERSION as VERSION, data_directory as _data_directory, listen_port
 from ezread.selection_requests import SelectionRequests
 from ezread.selection_session import SelectionSession
+from ezread.ai_api import ApiSessionPool
+from ezread.api_usage import ApiUsage
 from ezread import (
     storage as _storage,
     preferences as _preferences,
@@ -21,6 +23,7 @@ from ezread import (
     publication as _publication,
     structure as _structure,
     translations as _translations,
+    pdf_translations as _pdf_translations,
     tasks as _tasks,
     utils as _utils,
     web as _web,
@@ -35,6 +38,7 @@ STATIC = ROOT / 'static'
 PORT = 47831
 LOCK = threading.RLock()
 FILE_ACTION_LOCK = threading.Lock()
+DELETED_PAPERS: set[str] = set()
 JOBS = queue.Queue()
 CANCEL: dict[tuple[str, str], threading.Event] = {}
 QUEUED: set[tuple[str, str]] = set()
@@ -45,6 +49,8 @@ SHUTDOWN = threading.Event()
 INSTANCE_ID = secrets.token_hex(16)
 SELECTION_REQUESTS = SelectionRequests()
 SELECTION_SESSION = SelectionSession()
+API_USAGE = ApiUsage()
+AI_API = ApiSessionPool(usage=API_USAGE)
 STRUCTURE_JOBS = queue.Queue()
 STRUCTURE_QUEUED = set()
 DEFAULT_SETTINGS = {'sort': 'last_read', 'theme': 'paper', 'collections': [],
@@ -102,6 +108,10 @@ def validate_reader_state(value, doc):
 
 def paper_file_action(pid, action):
     return _library.paper_file_action(_context, pid, action)
+
+
+def delete_paper(pid):
+    return _library.delete_paper(_context, pid)
 
 
 journal_abbr = _library.journal_abbr
@@ -164,12 +174,20 @@ def restore_translation(pid, version_id):
     return _translations.restore_translation(_context, pid, version_id)
 
 
-def prepare_translation(doc, options=None):
-    return _translations.prepare_translation(_context, doc, options)
+def prepare_pdf_translation(doc, options=None):
+    return _pdf_translations.prepare(_context, doc, options)
 
 
-def execute_translation(pid, event):
-    return _translations.execute_translation(_context, pid, event)
+def execute_pdf_translation(pid, event):
+    return _pdf_translations.execute(_context, pid, event)
+
+
+def restore_pdf_translation(pid, version_id):
+    return _pdf_translations.restore(_context, pid, version_id)
+
+
+def restore_pdf_translation_draft(pid, draft_id):
+    return _pdf_translations.restore_draft(_context, pid, draft_id)
 
 
 def codex_status(force=False):
@@ -188,7 +206,6 @@ def enqueue(pid, kind, options=None):
     return _tasks.enqueue(_context, pid, kind, options)
 
 
-batches = _tasks.batches
 
 
 def worker():
@@ -232,18 +249,12 @@ def main():
         pass
     finally:
         import codex_bridge
-        import codex_usage
-        import codex_models
-        import selection_codex
         SHUTDOWN.set()
         _lifecycle.pause_jobs(_context)
         JOBS.put(None)
         STRUCTURE_JOBS.put(None)
         _processes.shutdown(codex_bridge._stop)
         SELECTION_REQUESTS.shutdown()
-        selection_codex.shutdown()
-        codex_usage.shutdown()
-        codex_models.shutdown()
         for event in CANCEL.values():
             event.set()
         worker_thread.join(timeout=5)

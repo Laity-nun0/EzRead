@@ -71,7 +71,8 @@ def main():
     parser.add_argument('--varied-cards', action='store_true', help='Include long titles, all card tiers and square/tall/wide synthetic covers.')
     options = parser.parse_args()
     executable = options.executable.resolve()
-    Handler.paper_count = 40 if options.background_stability else 5
+    # Wheel checks require enough cards to overflow the library scroll area.
+    Handler.paper_count = 40
     Handler.varied_cards = options.varied_cards
     if not executable.is_relative_to(ROOT.resolve()): raise SystemExit('Verification executable must stay inside the workspace.')
     handler = functools.partial(Handler, directory=str(ROOT))
@@ -87,20 +88,30 @@ def main():
             marker.write_text(json.dumps({'ezread-sort': 'year', 'ezread-reader-notes:smoke-paper': '{"value":"offline test draft"}'}), encoding='utf-8')
             for cycle in range(2):
                 report = data / f'report-{cycle}.json'
-                command = [str(executable), '--app-root', str(ROOT), '--data-dir', str(data), '--url', f'http://127.0.0.1:{server.server_port}', '--smoke-test', str(report)]
+                startup = data / f'ready-{cycle}.json'
+                command = [str(executable), '--app-root', str(ROOT), '--data-dir', str(data), '--url', f'http://127.0.0.1:{server.server_port}', '--smoke-test', str(report), '--startup-report', str(startup)]
                 process = subprocess.Popen(command, cwd=ROOT, creationflags=subprocess.CREATE_NO_WINDOW)
-                if cycle == 0:
-                    time.sleep(.7)
-                    duplicate = subprocess.run(command, cwd=ROOT, creationflags=subprocess.CREATE_NO_WINDOW, timeout=15)
-                    assert duplicate.returncode == 0, 'Duplicate startup should activate the existing native window.'
                 try:
+                    if cycle == 0:
+                        # Wait for native readiness instead of assuming a fixed cold-start time.
+                        deadline = time.monotonic() + 25
+                        while not startup.exists():
+                            if process.poll() is not None or time.monotonic() >= deadline:
+                                raise RuntimeError('Native window did not confirm startup readiness.')
+                            time.sleep(.05)
+                        ready = json.loads(startup.read_text(encoding='utf-8-sig'))
+                        assert ready.get('ready') is True and ready.get('process_id') == process.pid, ready
+                        duplicate = subprocess.run(command, cwd=ROOT, creationflags=subprocess.CREATE_NO_WINDOW, timeout=15)
+                        assert duplicate.returncode == 0, 'Duplicate startup should activate the existing native window.'
                     code = process.wait(timeout=70)
                 except subprocess.TimeoutExpired:
-                    # Only the child created here against this temporary library.
-                    process.terminate(); process.wait(timeout=5)
                     log = data / 'desktop.log'
                     if log.exists(): (ROOT / 'work' / 'webview2-smoke-failure.log').write_bytes(log.read_bytes())
                     raise RuntimeError('Native smoke timed out; inspect its isolated desktop.log.')
+                finally:
+                    # Only the child created here against this temporary library.
+                    if process.poll() is None:
+                        process.terminate(); process.wait(timeout=5)
                 if code != 0:
                     raise RuntimeError(report.read_text(encoding='utf-8-sig') if report.exists() else f'Native window exited with {code}')
                 value = json.loads(report.read_text(encoding='utf-8-sig'))
@@ -152,7 +163,8 @@ def main():
                     full, half, restored = (checks[f'{prefix}-{stage}'] for stage in ('full', 'half', 'restored'))
                     for item in (full, half, restored):
                         assert not item['verticalScroll'], f"Unnecessary full-height vertical scrollbar: {item['label']}"
-                        assert item['viewHeight'] <= item['clientHeight'], item
+                        # A virtual portrait monitor can exceed the physical window's height.
+                        assert item['maximumOffset'] == max(0, item['viewHeight'] - item['clientHeight']), item
                         assert item['scrollY'] == 0, item
                         assert item['zoomFactor'] == full['zoomFactor'], item
                         footer = item['layout']['footer']

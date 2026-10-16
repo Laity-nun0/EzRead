@@ -1,53 +1,30 @@
 "use strict";
-
-// Exercise real model-picker source with an asynchronous API and controlled
-// timers. A refresh from the settings page must finish visibly in both pickers.
-const assert = require("node:assert/strict"), fs = require("node:fs"), path = require("node:path"), vm = require("node:vm");
-class Node {
-  constructor(tag, attrs = {}, children = []) {
-    this.tag = tag; this.children = children.flat(); this.textContent = attrs.text || "";
-    this.value = attrs.value || ""; this.isConnected = true; this.disabled = false;
-    this.classList = { toggle() {}, add() {} };
-  }
-  replaceChildren(...items) { this.children = items.flat(); }
-  append(...items) { this.children.push(...items.flat()); }
-  addEventListener() {}
-}
-const catalog = { status: "ready", refreshing: false, models: [{ model: "chosen-model", display_name: "Chosen model",
-  default_reasoning_effort: "low", supported_reasoning_efforts: ["low", "high"] }], default_model_id: "chosen-model", error: "" };
-const timers = new Map(), calls = [];
-let nextTimer = 0;
-const context = vm.createContext({
-  el: (tag, attrs, ...children) => new Node(tag, attrs, children),
-  field: (label, input) => new Node("field", {}, [input]),
-  button: label => new Node("button", { text: label }),
-  api: async url => { calls.push(url); return structuredClone({ ...catalog, refreshing: url.includes("refresh=1") }); },
-  setTimeout: callback => { const id = ++nextTimer; timers.set(id, callback); return id; },
-  clearTimeout: id => timers.delete(id),
-  $: () => new Node("dialog"), console
-});
-vm.runInContext(fs.readFileSync(path.join(__dirname, "../static/translation-ui.js"), "utf8"), context);
-async function settle() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
-function runTimers() { const pending = [...timers.entries()]; timers.clear(); for (const [, callback] of pending) callback(); }
-const message = picker => picker.root.children[1].children[0].textContent;
-(async () => {
-  const full = vm.runInContext("modelPicker({model:'chosen-model',reasoning_effort:'high'})", context);
-  const selection = vm.runInContext("modelPicker({model:'chosen-model'})", context);
-  await settle();
-  assert.equal(calls.length, 1, "Initial reads should share the same request");
-  assert.equal(timers.size, 0);
-  await vm.runInContext("loadModels(true)", context); await settle();
-  assert.equal(timers.size, 2, "Settings-triggered refresh must start completion polling in both existing pickers");
-  assert.equal(full.ready(), true, "Existing catalog remains usable while refreshing");
-  assert.match(message(full), /后台更新|正在刷新/);
-  runTimers(); await settle();
-  assert.equal(calls.length, 3, "Both completion polls share a single request");
-  assert.equal(timers.size, 0, "Polling stops after the backend finishes");
-  assert.equal(message(full), ""); assert.equal(message(selection), "");
-  assert.equal(full.value().reasoning_effort, "high", "Refresh must preserve user's reasoning choice");
-  await vm.runInContext("loadModels(true)", context); await settle();
-  full.dispose(); selection.dispose();
-  assert.equal(timers.size, 0, "Closing the settings panel must cancel completion polling");
-  const count = calls.length; runTimers(); await settle(); assert.equal(calls.length, count);
-  console.log("Model picker: external refresh completion, cached choices, shared polling and disposal passed.");
-})().catch(error => { console.error(error); process.exitCode = 1; });
+const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
+function element(tag, attrs = {}, ...children) { return { tag, attrs, children: children.flat(Infinity).filter(value => value != null), value: attrs.value || '', disabled: Boolean(attrs.disabled), listeners: {}, replaceChildren(...values) { this.children = values.flat(Infinity); }, append(...values) { this.children.push(...values.flat(Infinity)); }, addEventListener(name, callback) { this.listeners[name] = callback; } }; }
+const fixed={provider:'deepseek',base_url:'https://api.deepseek.com',model:'deepseek-flash',max_output_tokens:393216,has_key:true};
+const settings={features:{translation:{...fixed,thinking:'disabled'},chat:{...fixed,thinking:'enabled',reasoning_effort:'high'}}};
+const calls=[];
+const context=vm.createContext({el:element,field:(label,input)=>element('label',{},label,input),api:async url=>{calls.push(url);return settings;},console});
+vm.runInContext(fs.readFileSync(`${__dirname}/../static/api-translation-ui.js`,'utf8'),context);
+function all(node) { return [node,...node.children.flatMap(value=>typeof value==='object'?all(value):[])]; }
+(async()=>{
+ const picker=context.apiTranslationPicker(settings,{},false,true), controls=all(picker.root);
+ assert.equal(calls.length,0); assert.equal(picker.ready(),true); assert.equal(picker.value().model,'deepseek-flash'); assert.equal(picker.value().thinking,'disabled');
+ assert.equal(picker.value().reasoning_effort,undefined); assert.equal(controls.filter(node=>node.tag==='select').length,0);
+ assert.equal(controls.filter(node=>node.tag==='input'&&['text','url','number'].includes(node.attrs.type)).length,0);
+ const thinking=controls.find(node=>node.attrs['aria-label']==='思考模式'),high=controls.find(node=>node.attrs['aria-label']==='高 · high'),max=controls.find(node=>node.attrs['aria-label']==='最高 · max');
+ thinking.checked=true;thinking.listeners.change(); assert.equal(high.checked,true); assert.equal(picker.value().reasoning_effort,'high');
+ high.checked=false;max.checked=true;assert.equal(picker.value().reasoning_effort,'max');
+ thinking.checked=false;thinking.listeners.change();assert.equal(picker.value().reasoning_effort,undefined);
+ picker.disable(true);assert.equal(thinking.disabled,true);picker.disable(false);assert.equal(thinking.disabled,false);
+ picker.setConfig({...fixed,model:'frozen-old-model'});assert.equal(picker.value().model,'frozen-old-model');assert.equal(picker.ready(),false);
+ picker.key.value='secret';picker.dispose();assert.equal(picker.key.value,'');
+ const chat=context.apiTranslationPicker(settings,{},true,false,'chat');assert.equal(chat.value().thinking,'enabled');assert.equal(chat.value().reasoning_effort,'high');
+ const chatModel=all(chat.root).find(node=>node.attrs['aria-label']==='问答默认模型');
+ assert.deepEqual(chatModel.children.map(node=>node.attrs.value),['deepseek-flash','deepseek-v4-pro']);
+ assert.equal(chatModel.value,'deepseek-flash');chatModel.value='deepseek-v4-pro';assert.equal(chat.value().model,'deepseek-v4-pro');
+ assert.notEqual(all(chat.root).find(node=>node.attrs.type==='radio').attrs.name,high.attrs.name,'Each picker owns a separate radio group.');
+ const missing=context.apiTranslationPicker({...settings,features:{translation:{...fixed,has_key:false}}});assert.equal(missing.ready(),false);
+ await context.loadTranslationApiSettings();assert.deepEqual(calls,['/api/translation-api']);
+ console.log('Fixed DeepSeek picker: independent feature defaults, thinking, frozen snapshot, key disposal and local-only loading passed.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

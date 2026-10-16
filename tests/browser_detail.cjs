@@ -204,8 +204,50 @@ const edge = process.env.EZREAD_BROWSER || path.join(process.env['PROGRAMFILES(X
     await edit.getByRole('button', { name: '关闭编辑', exact: true }).click();
     assert.equal((await (await page.request.get(origin + '/__test/detail-state')).json()).title_zh, savedMetadata.title_zh);
     assert.equal(await dialog.getByRole('link', { name: '发表信息来源', exact: true }).count(), 0);
+    // 使用模拟出版记录验证单次确认流程，不访问外部服务或模型。
+    const publicationChecks = [];
+    for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 780 }]) {
+      await page.setViewportSize(viewport);
+      for (const status of ['complete', 'partial', 'error']) {
+        await page.evaluate(() => document.querySelector('#toasts').replaceChildren());
+        const fixture = { ...savedMetadata, page_range: '', article_number: '',
+          metadata_enrichment: { status: 'needs_consent', missing: [{ key: 'page_range', label: '发表页码 / 文章编号' }] } };
+        const result = { ...fixture, page_range: status === 'error' ? '' : '1-20',
+          metadata_enrichment: { status, checked_at: status === 'error' ? '' : '2026-10-16T00:00:00Z',
+            missing: status === 'error' ? fixture.metadata_enrichment.missing : [],
+            conflicts: status === 'partial' ? ['authors'] : [],
+            error: status === 'error' ? '模拟查询失败，已保留现有信息。' : '' } };
+        let releaseLookup;
+        const beforeRequests = metadataRequests.length;
+        const endpoint = `**/api/papers/${pid}/metadata-enrich`;
+        await page.route(endpoint, async route => {
+          assert.deepEqual(route.request().postDataJSON(), { consent: true });
+          await new Promise(resolve => { releaseLookup = resolve; });
+          await route.fulfill({ json: { paper: result } });
+        });
+        await page.evaluate(paper => { void openPublicationLookup(paper); }, fixture);
+        assert.equal(await publication.locator('h2').innerText(), '补全出版信息');
+        const bounds = await publication.boundingBox();
+        assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= viewport.width + 1);
+        assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= viewport.height + 1);
+        if (status === 'partial') await publication.screenshot({ path: path.join(root, `work/publication-consent-${viewport.width}.png`) });
+        await publication.getByRole('button', { name: '联网补全', exact: true }).click();
+        await page.waitForFunction(() => document.querySelector('#publication-dialog h2').textContent === '正在核对出版信息');
+        assert.equal(await publication.getByRole('button', { name: '正在检索…', exact: true }).isDisabled(), true);
+        while (!releaseLookup) await new Promise(resolve => setTimeout(resolve, 10));
+        releaseLookup();
+        await page.waitForFunction(() => !document.querySelector('#publication-dialog').open);
+        const notice = status === 'complete' ? '出版信息已核对并保存' : status === 'partial'
+          ? '已保存可补全的出版信息，仍有差异或缺项，可在论文信息中核对。' : '模拟查询失败，已保留现有信息。';
+        await page.getByText(notice, { exact: true }).last().waitFor();
+        if (status === 'partial') await page.screenshot({ path: path.join(root, `work/publication-return-${viewport.width}.png`) });
+        assert.equal(metadataRequests.length, beforeRequests + 1, 'A lookup needs exactly one consent request and no second confirmation');
+        await page.unroute(endpoint);
+        publicationChecks.push({ viewport, status, closed: true });
+      }
+    }
     assert.equal(errors.length, 0, errors.join('\n'));
-    const report = { layouts, metadataLayouts, themes, errors, collectionSaved: true, notesSavedAndReopened: true, metadataSavedAndReopened: true, metadataCloseDoesNotSubmit: true, publicationSourceRemoved: true, retiredTeamStatus: 410, realModelCalls: 0, realLibraryWrites: 0 };
+    const report = { layouts, metadataLayouts, publicationChecks, themes, errors, collectionSaved: true, notesSavedAndReopened: true, metadataSavedAndReopened: true, metadataCloseDoesNotSubmit: true, publicationSourceRemoved: true, retiredTeamStatus: 410, realModelCalls: 0, realLibraryWrites: 0 };
     fs.writeFileSync(path.join(root, 'work/detail-layout-verification.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify({ viewportChecks: layouts.length, metadataViewportChecks: metadataLayouts.length, themes, errors, collectionSaved: true, notesSavedAndReopened: true, metadataSavedAndReopened: true, metadataCloseDoesNotSubmit: true, publicationSourceRemoved: true, retiredTeamStatus: 410 }));
   } finally { await browser.close(); }

@@ -1,24 +1,12 @@
 "use strict";
 
 async function openSettings(initialPanel = "appearance") {
-  let currentPanel = null, refreshPromise = null, disposed = false;
-  async function refreshTranslationSettings() {
-    if (refreshPromise) return refreshPromise;
-    refreshPromise = Promise.allSettled([
-      (async () => { if (modelRequest) await modelRequest.catch(() => {}); if (!disposed) await loadModels(true); })(),
-      refreshStatus(true).catch(error => {
-        state.status = { ...(state.status || {}), codex: { available: null, authenticated: null, message: `连接状态读取失败：${error.message}` } };
-        $("#settings-codex-status")?.replaceChildren(codexStatusPanel());
-      }),
-      (async () => { if (usageRequest) await usageRequest; if (!disposed) await loadUsage(true); })()
-    ]).finally(() => { refreshPromise = null; });
-    return refreshPromise;
-  }
+  let currentPanel = null, disposed = false;
   function preferenceRange(key, label, min, max) {
     return el("div", { class: "preference-control" }, el("label", {}, label), el("input", { type: "range", min, max, step: 1, value: state.settings[key] ?? DEFAULT_PREFERENCES[key], dataset: { preference: key }, "aria-label": label, oninput: event => changePreference({ [key]: Number(event.target.value) }) }), el("output", { dataset: { preferenceOutput: key } }, `${state.settings[key]} px`));
   }
   const themes = el("div", { class: "theme-grid" }, THEME_CHOICES.map(([value, name]) => el("button", { type: "button", class: `theme-choice ${state.settings.theme === value ? "selected" : ""}`, dataset: { themeChoice: value }, "aria-pressed": state.settings.theme === value, onclick: () => changePreference({ theme: value }) }, el("span", { class: "theme-swatch", "aria-hidden": "true" }), name)));
-  const fullTranslation = defaultTranslationPanel(), selectionTranslation = defaultTranslationPanel(true);
+  const fullTranslation = defaultTranslationPanel();
   const panels = [
     ["appearance", "外观与字号", el("div", {},
       el("h3", {}, "阅读主题"), themes,
@@ -27,11 +15,12 @@ async function openSettings(initialPanel = "appearance") {
         preferenceRange("reader_font_size", "中文阅读字号", 14, 28),
         el("div", { class: "preference-preview" }, "这行文字用来展示阅读字号的大小。")))],
     ["journals", "期刊等级", journalCataloguePanel()],
-    ["translation", "翻译", el("div", {}, fullTranslation, selectionTranslation,
-      el("section", { class: "settings-account-section", "aria-labelledby": "settings-account-heading" },
-        el("h3", { id: "settings-account-heading" }, "连接与账号共享用量"),
-        el("div", { class: "status-panel", id: "settings-codex-status" }, codexStatusPanel()),
+    ["translation", "翻译", el("div", {}, fullTranslation,
+      el("section", { class: "settings-account-section" },
+        button("刷新本机 API 状态", event => act(refreshStatus, event.currentTarget)),
+        el("div", { class: "status-panel", id: "settings-api-status" }, apiStatusPanel()),
         el("div", { class: "usage-panel", id: "settings-usage" }, usagePanel(false))))],
+    ["chat", "问答", apiTranslationSettingsPanel("chat")],
     ["data", "文献与备份", el("div", {}, el("h3", {}, "本地文献库"), el("p", { class: "settings-path" }, state.status?.data_dir || "本机文献库"), el("div", { class: "settings-data-actions" }, el("a", { href: "/api/export", class: "button secondary", download: "EzRead-library-backup.zip" }, icon("download"), "导出完整备份"), button("查看回收站", event => act(showTrash, event.currentTarget), "secondary", "trash")), el("div", { id: "trash-list" }))],
     ["about", "关于", el("div", { class: "about-ezread" }, el("img", { src: "/static/ezread-icon.png", width: "84", height: "84", alt: "EzRead" }), el("h3", {}, "EzRead"), el("p", { class: "small muted" }, state.status?.version ? `版本 ${state.status.version} · 本地论文阅读器` : "本地论文阅读器"))]
   ];
@@ -44,7 +33,7 @@ async function openSettings(initialPanel = "appearance") {
     footer.hidden = id !== "appearance";
     $("#settings-dialog").scrollTop = 0;
     queueLayoutCheck();
-    if (id === "translation" && entered) void refreshTranslationSettings();
+    if (["translation", "chat"].includes(id) && entered) void refreshStatus().catch(() => {});
   }
   for (const [id, name, content] of panels) {
     const tab = el("button", { role: "tab", id: `settings-tab-${id}`, dataset: { panel: id }, "aria-controls": `settings-panel-${id}`, onclick: () => selectPanel(id) }, name);
@@ -63,7 +52,7 @@ async function openSettings(initialPanel = "appearance") {
     if (disposed || layoutFrame !== null) return;
     layoutFrame = requestAnimationFrame(() => {
       layoutFrame = null;
-      if (currentPanel !== "translation" || !dialog.open) { dialog.classList.remove("settings-content-overflow"); return; }
+      if (!["translation", "chat"].includes(currentPanel) || !dialog.open) { dialog.classList.remove("settings-content-overflow"); return; }
       const style = getComputedStyle(dialog);
       const edges = [style.paddingTop, style.paddingBottom, style.borderTopWidth, style.borderBottomWidth].reduce((sum, value) => sum + (parseFloat(value) || 0), 0);
       dialog.classList.toggle("settings-content-overflow", content.scrollHeight + edges > innerHeight - 12 + 1);

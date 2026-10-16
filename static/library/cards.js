@@ -95,20 +95,20 @@ function renderMasonry(grid, papers) {
   schedule();
 }
 function renderCard(p) {
-  const t = translationOf(p), rank = rankAppearance(p), cover = el("div", { class: "card-cover-inner" });
+  const t = pdfLayoutOf(p), rank = rankAppearance(p), cover = el("div", { class: "card-cover-inner" });
   const media = el("div", { class: "cover-media" });
   if (p.cover_url) { const img = imageNode(p.cover_url, { alt: `${titleOf(p)} · 封面`, onerror: event => event.target.replaceWith(placeholderImage()) }); media.append(img); } else media.append(placeholderImage());
   cover.append(media);
   const favorite = el("button", { class: `card-save ${p.favorite ? "saved" : ""}`, title: p.favorite ? "取消收藏" : "收藏论文", "aria-label": p.favorite ? "取消收藏" : "收藏论文", onclick: event => { event.stopPropagation(); act(() => patchPaper(p.id, { favorite: !p.favorite }), event.currentTarget); } }, icon("star"));
-  const remove = iconButton("trash", `删除论文：${titleOf(p)}`, event => { event.stopPropagation(); if (confirm(`将《${titleOf(p)}》移入回收站？可在设置 → 文献与备份中恢复。`)) void act(() => deletePapers([p.id]), event.currentTarget); });
+  const remove = iconButton("trash", `永久删除论文：${titleOf(p)}`, event => { event.stopPropagation(); if (confirm(`永久删除《${titleOf(p)}》及其文件、笔记、译文和全部会话？无法在应用内恢复。`)) void act(() => deletePapers([p.id]), event.currentTarget); });
   remove.classList.add("card-delete");
   const cornerAction = state.selectionMode ? el("button", { class: `card-select ${state.selectedPapers.has(p.id) ? "selected" : ""}`, title: state.selectedPapers.has(p.id) ? "取消选择" : "选择论文", "aria-label": `${state.selectedPapers.has(p.id) ? "取消选择" : "选择论文"}：${titleOf(p)}`, "aria-pressed": String(state.selectedPapers.has(p.id)), onclick: event => { event.stopPropagation(); togglePaperSelection(p.id); } }, state.selectedPapers.has(p.id) ? icon("check") : null) : remove;
   const actions = el("div", { class: "card-actions" }, favorite, cornerAction);
-  const translation = button(cardTranslationLabel(p), event => { event.stopPropagation(); openTranslationSetup([p]); }, "card-translate", "translate", { title: `${statusName(t.status)} · 当前译文 ${t.current_done || 0}/${t.total || 0} 段；点击确认翻译或整篇重译`, "aria-label": `${cardTranslationLabel(p)}：${titleOf(p)}` });
+  const translation = button(cardTranslationLabel(p), event => { event.stopPropagation(); act(() => openPdfLayoutSetup(p), event.currentTarget); }, "card-translate", "translate", { title: `PDF 版式翻译 · ${statusName(t.status)}；点击查看设置、重译和版本`, "aria-label": `${cardTranslationLabel(p)}：${titleOf(p)}` });
   const details = button("论文简介", event => { event.stopPropagation(); act(() => openDetail(p.id)); }, "card-detail", "arrow", { "aria-label": `查看论文简介：${titleOf(p)}` });
   const config = cardModelConfig(p);
-  const configText = config.model && config.effort ? `${config.model} · ${CARD_EFFORT_NAMES[config.effort] || config.effort}` : config.model ? `${config.model} · 强度待确认` : "模型待确认";
-  const model = button(configText, event => { event.stopPropagation(); openPaperModel(p); }, "card-ai-model", "", { title: `${config.legacyTranslation ? "历史译文模型未记录。" : ""}${config.locked ? "本篇已固定" : "首次 AI 任务时按当前默认配置固定"}：${configText}；点击更改` });
+  const configText = config.model ? `${config.legacy ? "历史 Codex" : apiProviderLabel(config.provider)} · ${config.model}` : "API 模型待配置";
+  const model = button(configText, event => { event.stopPropagation(); void openPaperModel(p); }, "card-ai-model", "", { "aria-label": `本篇 API 模型：${configText}`, title: `${config.locked ? "本篇已固定 API 配置" : "首次 AI 任务时按当前 API 默认配置固定"}；点击更改` });
   const chat = button("对话", event => { event.stopPropagation(); act(async () => { await openReader(p.id); await openPaperChat(); }); }, "card-ai-chat", "chat");
   const body = el("div", { class: "card-body" }, el("div", { class: "card-header" }, el("div", { class: "card-journal" }, el("span", { class: "journal-badge", title: p.conference_name || journalNameOf(p) }, journalOf(p)), el("span", { class: "card-year" }, p.year || "年份待补充")), actions), el("h2", { class: "card-title", lang: "en" }, titleOf(p)));
   const content = el("div", { class: "card-content" }, el("div", { class: "card-cover" }, cover), el("div", { class: "card-controls" }, translation, details, model, chat));
@@ -140,8 +140,7 @@ function renderBulkbar(papers) {
       button("全选", () => { papers.forEach(p => state.selectedPapers.add(p.id)); renderLibrary(); }, "secondary", "", { title: "选中当前筛选结果中的全部论文" }),
       button("清空选择", () => { state.selectedPapers.clear(); renderLibrary(); }, "secondary"),
       button("移入合集", () => openMovePapers([...state.selectedPapers]), "secondary", "folder", { disabled: !state.selectedPapers.size }),
-      button("全部翻译", () => openTranslationSetup(state.papers.filter(p => state.selectedPapers.has(p.id))), "primary", "translate", { disabled: !state.selectedPapers.size }),
-      button("移入回收站", event => { const ids = [...state.selectedPapers]; if (ids.length && confirm(`将选中的 ${ids.length} 篇论文移入回收站？可在设置 → 文献与备份中恢复。`)) void act(() => deletePapers(ids), event.currentTarget); }, "danger", "trash", { disabled: !state.selectedPapers.size })));
+      button("永久删除", event => { const ids = [...state.selectedPapers]; if (ids.length && confirm(`永久删除选中的 ${ids.length} 篇论文及其文件、笔记、译文和全部会话？无法在应用内恢复。`)) void act(() => deletePapers(ids), event.currentTarget); }, "danger", "trash", { disabled: !state.selectedPapers.size })));
 }
 function renderLegend() {
   $("#if-legend").replaceChildren(...["top", "important", "other", "conference", "preprint"].map(tier => el("span", { class: `legend-tile legend-${tier}` }, TIER_NAMES[tier])));

@@ -30,14 +30,15 @@ def _cli() -> str | None:
     explicit = environment_value("EZREAD_CODEX_PATH")
     if explicit and Path(explicit).is_file():
         return str(Path(explicit).resolve())
-    found = shutil.which("codex.exe") or shutil.which("codex")
+    found = shutil.which("codex.exe")
     if found:
         return found
     local = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
     candidates = list((local / "OpenAI/Codex/bin").glob("*/codex.exe"))
     if candidates:
         return str(max(candidates, key=lambda p: p.stat().st_mtime))
-    return None
+    # npm's extensionless script is not a Windows executable; prefer the native bundle.
+    return shutil.which("codex")
 
 
 def _environment() -> dict[str, str]:
@@ -335,30 +336,7 @@ def translate_selection(text: str, *, model: str, reasoning_effort: str,
 def summarize_paper(text: str, *, cancel_event=None, timeout: float = 420,
                     model: str | None = None, reasoning_effort: str = 'low') -> dict:
     from ezread.overview import validate_overview
-    fields = ["title_zh", "summary"]
-    schema = {"type": "object", "additionalProperties": False,
-              "properties": {**{name: {"type": "string"} for name in fields},
-                             "tags": {"type": "array", "items": {"type": "string"}},
-                             "overview_sections": {"type": "array", "items": {
-                                 "type": "object", "additionalProperties": False,
-                                 "properties": {"title": {"type": "string"}, "content": {"type": "string"}},
-                                 "required": ["title", "content"]}}},
-              "required": fields + ["tags", "overview_sections"]}
-    instruction = """Produce a grounded Chinese reading card from the supplied paper text only.
-title_zh: faithfully translated paper title. summary: one sentence identifying the concrete contribution.
-overview_sections: organize the overview into meaningful sections specific to this paper.
-Choose the Chinese section titles, number, order and emphasis from the supplied content and paper type.
-Do not follow a predefined outline or reuse the same headings for every paper. A review, a theory paper,
-a device study and an empirical study may need different structures. Omit unsupported or empty sections.
-Each section has a short, informative title and content in concise plain-text paragraphs; do not repeat
-the title in the content. Explain the contribution and supporting evidence without duplicating the summary.
-Distinguish real experiments from simulation, observations from causal claims, and measured results from claims.
-For results include the key metric with units and sample size ONLY if present in the supplied text.
-State reported evidence boundaries where relevant and mark any inference as '阅读提示'; do not invent defects.
-If the supplied text is incomplete, explain the material evidence gaps without inventing missing results.
-tags: 3-6 short Chinese research-topic tags useful for finding a remembered device or approach.
-Do not invent author/team information, impact factors, quartiles, dates, citations, or outside knowledge.
-"""
+    from ezread.overview import OVERVIEW_INSTRUCTION as instruction, OVERVIEW_SCHEMA as schema
     result = _run_json(instruction, {"paper_text": text}, schema,
                        cancel_event=cancel_event, timeout=timeout,
                        model=model, reasoning_effort=reasoning_effort)

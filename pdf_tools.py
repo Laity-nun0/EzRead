@@ -20,9 +20,9 @@ import pypdfium2 as pdfium
 
 _PDF_LOCK = threading.RLock()
 _FIGURE_START = re.compile(r"^(?:Fig(?:ure)?|FIG(?:URE)?)\.?\s*\d+\s*(?:[|:—–]|\.(?=\s)|\s+(?=[A-Z]))")
-_TABLE_START = re.compile(r"^(?:Table|TABLE)\s+\d+\b")
+_TABLE_START = re.compile(r"^(?:Table|TABLE)\s+\d+(?:\s*$|[.:]\s*$|\s*\n|\s*[|:—–])")
 _DOI = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.I)
-_PROSE_LEAD = re.compile(r'^(?:where|and|or|that|which|with|for|if|when|then|using|here|as|we)\b', re.I)
+_PROSE_LEAD = re.compile(r'^(?:where|and|or|that|which|with|for|if|when|then|using|here|as|we|by)\b', re.I)
 
 
 def _box(obj):
@@ -164,8 +164,10 @@ def _line_text(chars):
     """Restore spaces geometrically, including PDFs without actual space glyphs."""
     chars = sorted(chars, key=lambda c: (c['x0'], c['top']))
     parts, previous = [], None
-    for char in chars:
+    for index, char in enumerate(chars):
         value = unicodedata.normalize('NFKC', char.get('text', ''))
+        if value in ('◦', 'º') and next((c.get('text') for c in chars[index + 1:] if c.get('text', '').strip()), '') in ('C', 'F', 'K'):
+            value = '°'
         if not value:
             continue
         if previous is not None:
@@ -196,7 +198,7 @@ def _column_gutter(page):
                               if x < page.width * .46 or x > page.width * .54)
     if flank < 3 or minimum > flank * .72:
         return None
-    threshold = minimum + int(minimum * .23)
+    threshold = minimum + max(1, int(minimum * .23))
     runs = []
     for x, count in values:
         if count <= threshold:
@@ -249,6 +251,45 @@ def _lines(page):
         else:
             rows.append({'cy': cy, 'size': char['size'], 'chars': [char],
                          'top': char['top'], 'bottom': char['bottom'], 'column': char['_column']})
+    # A raised degree glyph may have joined the preceding row. Its adjacent
+    # unit letter anchors it to the correct baseline, including short cells.
+    for row in list(rows):
+        for char in list(row['chars']):
+            if char.get('text') not in ('°', '◦', 'º'):
+                continue
+            candidates = [(min(abs(unit['x0'] - char['x1']), abs(char['x0'] - unit['x1'])), abs((unit['top'] + unit['bottom']) / 2 - (char['top'] + char['bottom']) / 2), other)
+                for other in rows for unit in other['chars']
+                if ((unit.get('text') in ('C', 'F', 'K') and 0 <= unit['x0'] - char['x1'] <= max(3, unit['size']))
+                    or (unit.get('text') == 'N' and 0 <= char['x0'] - unit['x1'] <= max(3, unit['size'])))
+                and abs((unit['top'] + unit['bottom']) / 2 - (char['top'] + char['bottom']) / 2) <= max(6, unit['size'])]
+            if candidates:
+                parent = min(candidates, key=lambda item: item[:2])[2]
+                if parent is not row:
+                    row['chars'].remove(char)
+                    parent['chars'].append(char)
+        if not row['chars']:
+            rows.remove(row)
+    # Other superscripts in prose belong to their baseline, not a new equation.
+    for row in list(rows):
+        text = _line_text(row['chars'])
+        if len(text) > 8 or re.search(r'[A-Za-z]{3,}', text):
+            continue
+        if not any(re.search(r'Math|Mth|Symbol|CMSY|CMMI|MTMI', c.get('fontname', ''), re.I) for c in row['chars']):
+            continue
+        box = _union([_box(c) for c in row['chars']])
+        def unit_parent(other):
+            return text in ('°', '◦', 'º') and any(c.get('text') in ('C', 'F', 'K')
+                and 0 <= c['x0'] - box[2] <= other['size'] for c in other['chars'])
+        neighbors = [other for other in rows if other is not row and other['column'] == row['column']
+                     and (unit_parent(other) or len(re.findall(r'[A-Za-z]{3,}', _line_text(other['chars']))) >= 3)
+                     and other['size'] > row['size'] * 1.15
+                     and abs(other['cy'] - row['cy']) <= other['size'] * .85
+                     and min(c['x0'] for c in other['chars']) - 2 <= box[0]
+                     and box[2] <= max(c['x1'] for c in other['chars']) + 2]
+        if neighbors:
+            parent = min(neighbors, key=lambda other: (not unit_parent(other), abs(other['cy'] - row['cy'])))
+            parent['chars'].extend(row['chars'])
+            rows.remove(row)
     lines = []
     for row in rows:
         ordered = sorted(row['chars'], key=lambda c: c['x0'])
@@ -269,7 +310,7 @@ def _lines(page):
             size = statistics.median(c['size'] for c in segment)
             fonts = [c.get('fontname', '') for c in segment]
             bold = sum(bool(re.search(r'Bold|\.B\b|Semibold|Demi', f, re.I)) for f in fonts) / len(fonts)
-            math_chars = sum(bool(re.search(r'Math|Mth|Symbol|CMSY|CMMI|MTMI', f, re.I)) for f in fonts)
+            math_chars = sum(bool(re.search(r'Math|Mth|Symbol|CMSY|CMMI|MTMI|AdvP4C|AdvPSMP', f, re.I)) for f in fonts)
             lines.append({'text': text, 'bbox': _union([_box(c) for c in segment]),
                           'size': size, 'bold': bold, 'math': math_chars / len(fonts),
                           'chars': segment, '_column': row['column'],
@@ -295,12 +336,14 @@ def _is_running(line, width, height, page_number):
     return False
 
 
-def _graphic_candidates(page, lines):
+def _graphic_candidates(page, lines, exclude_boxes=()):
     """Combine raster and vector primitives, guided by figure-caption anchors."""
     width, height = float(page.width), float(page.height)
     primitives = []
     for obj in list(page.images) + list(page.rects) + list(page.curves) + list(page.lines):
         box = _box(obj)
+        if any(_inside((box[0] + box[2]) / 2, (box[1] + box[3]) / 2, excluded) for excluded in exclude_boxes):
+            continue
         w, h = box[2] - box[0], box[3] - box[1]
         if box[1] < 32 or box[3] > height - 26 or w < 0 or h < 0:
             continue
@@ -309,6 +352,8 @@ def _graphic_candidates(page, lines):
         if w > width * 0.94 and h > height * 0.9:
             continue
         if w * h < 2 and max(w, h) < 10:
+            continue
+        if obj.get('object_type') == 'rect' and obj.get('fill') and (box[0] < -2 or box[2] > width + 2):
             continue
         primitives.append(box)
     components = []
@@ -329,15 +374,50 @@ def _graphic_candidates(page, lines):
     candidates = [b for b in components if b[2] - b[0] > 55 and b[3] - b[1] > 40
                   and (b[2] - b[0]) * (b[3] - b[1]) > width * height * 0.012]
     captions = [line for line in lines if _FIGURE_START.match(line['text'])]
+    # PDF object bounds may extend beyond the visible clipping path. Captions
+    # form a hard lower boundary; such objects must never absorb their text.
+    def caption_boundary(box):
+        lower = [line['bbox'][1] - 3 for line in captions
+                 if box[1] + 30 < line['bbox'][1] <= box[3] + 100
+                 and box[2] >= line['bbox'][0] and box[0] <= line['bbox'][2]]
+        return min(lower) if lower else height - 26
+
+    components = [[box[0], box[1], box[2], min(box[3], caption_boundary(box))]
+                  for box in components]
+    candidates = [[box[0], box[1], box[2], min(box[3], caption_boundary(box))]
+                  for box in candidates]
     for caption in captions:
         cb = caption['bbox']
-        above = [b for b in components if b[3] <= cb[1] + 5 and cb[1] - b[3] < 60
-                 and b[2] >= cb[0] and b[0] <= cb[2] + 12]
+        upper = max((line['bbox'][3] for line in captions if line['bbox'][1] < cb[1] - 3
+                     and line['bbox'][2] >= cb[0] and line['bbox'][0] <= cb[2]), default=32)
+        available = [b for b in components if not any(other is not caption
+                     and b[3] <= other['bbox'][1] + 5 and 0 <= other['bbox'][1] - b[3] < 60
+                     and b[2] >= other['bbox'][0] and b[0] <= other['bbox'][2] for other in captions)]
+        above = [b for b in available if b[3] <= cb[1] + 5 and cb[1] - b[3] < 60
+                 and b[1] >= upper and b[2] >= cb[0] and b[0] <= cb[2] + 12]
         if above:
             nearest = max(above, key=lambda b: b[3])
-            aligned = [b for b in components if b[3] <= cb[1] + 5 and b[3] >= nearest[1]
-                       and b[1] <= nearest[3] and b[0] >= 20 and b[2] <= width - 20]
-            merged = _union(aligned or [nearest])
+            wide = nearest[2] - nearest[0] > width * .55 or any(
+                line is not caption and abs(line['bbox'][1] - cb[1]) < 3
+                and line['bbox'][0] > width * .5 and abs(line['size'] - caption['size']) < .3
+                and not _FIGURE_START.match(line['text']) for line in lines)
+            row = [b for b in available if b in candidates and b[1] >= upper and b[3] <= cb[1] + 5
+                   and b[3] >= nearest[1] and b[1] <= nearest[3]]
+            if row and not any(other is not caption and abs(other['bbox'][1] - cb[1]) < 20 for other in captions):
+                span = _union(row)
+                wide = wide or span[2] - span[0] > width * .55
+            aligned = [b for b in available if b[3] <= cb[1] + 5 and b[3] >= nearest[1]
+                       and b[1] <= nearest[3] and b[1] >= upper and b[0] >= 20 and b[2] <= width - 20
+                       and (wide or ((b[0] + b[2]) / 2 < width / 2) == ((cb[0] + cb[2]) / 2 < width / 2))]
+            selected = aligned or [nearest]
+            while True:
+                more = [b for b in available if b not in selected and b[1] >= upper and b[3] <= cb[1] + 5
+                        and (wide or ((b[0] + b[2]) / 2 < width / 2) == ((cb[0] + cb[2]) / 2 < width / 2))
+                        and any(_intersect(b, prior, 30) for prior in selected)]
+                if not more:
+                    break
+                selected += more
+            merged = _union(selected)
             if merged[2] - merged[0] > 55 and merged[3] - merged[1] > 40:
                 candidates.append(merged)
     # Prefer containing whole-figure regions over small inset duplicates.
@@ -347,6 +427,8 @@ def _graphic_candidates(page, lines):
         raster_area = sum((i['x1'] - i['x0']) * (i['bottom'] - i['top']) for i in page.images
                           if _inside((i['x0'] + i['x1']) / 2, (i['top'] + i['bottom']) / 2, box))
         if not nearby_caption and raster_area < width * height * .03:
+            continue
+        if not nearby_caption and box[1] < height * .18 and (box[2] - box[0]) * (box[3] - box[1]) < width * height * .025:
             continue
         if any(_inside((box[0] + box[2]) / 2, (box[1] + box[3]) / 2, prior) for prior in result):
             continue
@@ -359,14 +441,127 @@ def _graphic_candidates(page, lines):
         w, h = box[2] - box[0], box[3] - box[1]
         if (box[1] < 32 or box[3] > height - 26 or w < 35 or h < 35
                 or w * h < width * height * .002
+                or box[1] < height * .18 and w * h < width * height * .025
                 or w > width * .94 and h > height * .9):
             continue
         center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
         if any(_inside(*center, previous) for previous in result):
             continue
+        if any(_inside(*center, excluded) for excluded in exclude_boxes):
+            continue
         result.append([max(0, box[0] - 3), max(0, box[1] - 3),
                        min(width, box[2] + 3), min(height, box[3] + 3)])
-    return sorted(result, key=lambda b: (b[1], b[0]))
+    expanded = []
+    for box in result:
+        bottom = caption_boundary(box)
+        prose = [line['bbox'] for line in lines
+                 if (len(re.findall(r'[A-Za-z]{3,}', line['text'])) >= 5
+                     or re.match(r'^\d+(?:\.\d+)*\.?\s+[A-Za-z]{3,}', line['text']))
+                 and not _inside((line['bbox'][0] + line['bbox'][2]) / 2,
+                                 (line['bbox'][1] + line['bbox'][3]) / 2, box)]
+        vicinity = [box[0] - 30, box[1] - 12, box[2] + 30, min(box[3] + 14, bottom)]
+        if box[2] - box[0] < width * .55:
+            neighbors = [text_box for text_box in prose
+                         if text_box[1] < box[3] and text_box[3] > box[1]]
+            left = [text_box[2] for text_box in neighbors if text_box[2] < box[0]]
+            right = [text_box[0] for text_box in neighbors if text_box[0] > box[2]]
+            if left:
+                vicinity[0] = max(vicinity[0], max(left) + 3)
+            if right:
+                vicinity[2] = min(vicinity[2], min(right) - 3)
+        labels = [_box(char) for char in page.chars if char.get('text', '').strip()
+                  and char['top'] >= height * .055
+                  and _inside((char['x0'] + char['x1']) / 2, (char['top'] + char['bottom']) / 2, vicinity)
+                  and not any(_inside((char['x0'] + char['x1']) / 2,
+                                      (char['top'] + char['bottom']) / 2, excluded) for excluded in exclude_boxes)
+                  and not any(_inside((char['x0'] + char['x1']) / 2,
+                                      (char['top'] + char['bottom']) / 2, text_box) for text_box in prose)
+                  and char['bottom'] < bottom]
+        complete = _union([box] + labels)
+        gutter = _column_gutter(page)
+        if gutter and box[2] - box[0] < width * .55:
+            if (box[0] + box[2]) / 2 < sum(gutter) / 2:
+                complete[2] = min(complete[2], gutter[0])
+            else:
+                complete[0] = max(complete[0], gutter[1])
+        expanded.append([max(0, complete[0] - 2), max(32, complete[1] - 2),
+                         min(width, complete[2] + 2), min(bottom, complete[3] + 2)])
+    return sorted(expanded, key=lambda b: (b[1], b[0]))
+
+
+def _table_blocks(page, lines):
+    """Locate ruled tables before article columns can split their cells."""
+    tables = []
+    anchors = [line for line in lines if _TABLE_START.match(line['text'])]
+    horizontal = [edge for edge in page.edges if edge.get('orientation') == 'h'
+                  and edge['x1'] - edge['x0'] >= 60]
+    for anchor in anchors:
+        cb = anchor['bbox']
+        below = [edge for edge in horizontal if 0 <= edge['top'] - cb[3] < 70
+                 and edge['x0'] - 5 <= cb[0] <= edge['x1']]
+        if not below:
+            continue
+        top = min(below, key=lambda edge: edge['top'])
+        next_anchor = min((line['bbox'][1] for line in anchors if line['bbox'][1] > cb[1]), default=page.height - 26)
+        rules = [edge for edge in horizontal if top['top'] <= edge['top'] < next_anchor
+                 and abs(edge['x0'] - top['x0']) < 5 and abs(edge['x1'] - top['x1']) < 5]
+        if len({round(edge['top'], 1) for edge in rules}) < 2:
+            continue
+        box = [top['x0'], top['top'], top['x1'], max(edge['bottom'] for edge in rules) + 2]
+        caption_lines = [line for line in lines if cb[1] <= line['bbox'][1] and line['bbox'][3] <= top['top']
+                         and box[0] - 3 <= (line['bbox'][0] + line['bbox'][2]) / 2 <= box[2] + 3] or [anchor]
+        contents = [line for line in lines if _inside((line['bbox'][0] + line['bbox'][2]) / 2,
+                     (line['bbox'][1] + line['bbox'][3]) / 2, box)]
+        rows = []
+        for line in sorted(contents, key=lambda item: (item['bbox'][1], item['bbox'][0])):
+            cy = (line['bbox'][1] + line['bbox'][3]) / 2
+            if rows and abs(cy - rows[-1][0]) < max(3, line['size'] * .45):
+                rows[-1][1].append(line)
+            else:
+                rows.append((cy, [line]))
+        if len(rows) < 3 or sum(len(row) >= 2 for _, row in rows) < 2:
+            continue
+        text = '\n'.join(' | '.join(item['text'] for item in sorted(row, key=lambda item: item['bbox'][0]))
+                         for _, row in rows)
+        tables.append({'text': _join_lines(caption_lines), 'kind': 'caption',
+                       'bbox': _union([line['bbox'] for line in caption_lines]),
+                       '_lines': caption_lines, 'is_formula': False})
+        tables.append({'text': text, 'kind': 'table', 'bbox': box, '_lines': contents,
+                       'is_formula': False, 'is_table': True})
+    return tables
+
+
+def _caption_columns(lines, width, figure_boxes):
+    """Split only full-width caption bands, not arbitrary justified prose."""
+    anchors = [line for line in lines if _FIGURE_START.match(line['text'])
+               and any(box[2] - box[0] > width * .55 and 0 <= line['bbox'][1] - box[3] < 70
+                       for box in figure_boxes)]
+    bands = []
+    for anchor in anchors:
+        start, end = anchor['bbox'][1], anchor['bbox'][3]
+        for line in sorted(lines, key=lambda item: item['bbox'][1]):
+            if line['bbox'][1] < start:
+                continue
+            if line['size'] > anchor['size'] * 1.08 or line['bbox'][1] - end > 12:
+                break
+            end = max(end, line['bbox'][3])
+        bands.append((start, end))
+    result = []
+    for line in lines:
+        chars = sorted(line['chars'], key=lambda char: char['x0'])
+        gaps = [(right['x0'] - left['x1'], index + 1)
+                for index, (left, right) in enumerate(zip(chars, chars[1:]))
+                if width * .44 < (left['x1'] + right['x0']) / 2 < width * .56]
+        if (not any(start - 1 <= line['bbox'][1] <= end for start, end in bands)
+                or not gaps or max(gaps)[0] < 5):
+            result.append(line)
+            continue
+        _, split_index = max(gaps)
+        for column, selected in zip(('left', 'right'), (chars[:split_index], chars[split_index:])):
+            if selected:
+                result.append({**line, 'text': _line_text(selected), 'bbox': _union([_box(c) for c in selected]),
+                               'chars': selected, '_column': column, '_split': width / 2})
+    return sorted(result, key=lambda line: (line['bbox'][1], line['bbox'][0]))
 
 
 def _join_lines(lines):
@@ -387,7 +582,10 @@ def _paragraphs(lines, width, body_size):
         ordinary_words = re.findall(r'[A-Za-z]{3,}', re.sub(r'\(cid:\d+\)', '', line['text']))
         ordinary_words = [word for word in ordinary_words
                           if not re.fullmatch(r'sin|cos|tan|arctan|exp|log|lim|max|min|[DW]?wall', word)]
-        line['equation'] = (('=' in line['text'] or line['math'] > .24
+        unit_symbol = bool(re.fullmatch(r'[°◦º±]+', line['text']))
+        equality = '=' in line['text'] and not line['text'].lstrip().startswith('=') and len(ordinary_words) < 2
+        unmapped_equal = any(c.get('text') == '¼' and 'AdvP4C' in c.get('fontname', '') for c in line['chars'])
+        line['equation'] = (not unit_symbol and (equality or unmapped_equal or line['math'] > .24
                              or '(cid:' in line['text'] or re.search(r'[∑∏∂∈≤≥]', line['text'])
                              or re.search(r'(?:ffi|fi){4,}', line['text']))
                             and len(ordinary_words) < 5 and len(line['text']) < 240
@@ -430,7 +628,8 @@ def _paragraphs(lines, width, body_size):
         if _FIGURE_START.match(text) or _TABLE_START.match(text):
             kind = 'caption'
         math_ratio = sum(x['math'] * len(x['chars']) for x in group) / max(1, sum(len(x['chars']) for x in group))
-        equation = any(x.get('equation') for x in group) or (math_ratio > .24 and len(re.findall(r'[A-Za-z]{3,}', text)) < 5)
+        equation = any(x.get('equation') for x in group) or (math_ratio > .24 and len(re.findall(r'[A-Za-z]{3,}', text)) < 5
+                    and not re.fullmatch(r'[°◦º±]+', text))
         blocks.append({'text': text, 'kind': kind, 'bbox': _union([x['bbox'] for x in group]),
                        '_lines': group, 'is_formula': equation})
     return blocks
@@ -510,23 +709,28 @@ def _ordered_blocks(lines, width, body_size, figure_boxes):
     return output
 
 
-def _merge_captions(blocks):
+def _merge_captions(blocks, figure_boxes=(), width=None):
     """Join bold caption leads and their smaller-font column continuations."""
     output = []
     index = 0
     while index < len(blocks):
         block = blocks[index]
         index += 1
-        if block['kind'] != 'caption':
+        if block['kind'] != 'caption' or block.get('is_table'):
             output.append(block)
             continue
         base_size = statistics.median(l['size'] for l in block['_lines'])
+        spanning = width is not None and any(box[2] - box[0] > width * .55
+                   and 0 <= block['bbox'][1] - box[3] < 70 for box in figure_boxes)
         group = [block]
         while index < len(blocks):
             candidate = blocks[index]
             size = statistics.median(l['size'] for l in candidate['_lines'])
             span = _union([b['bbox'] for b in group])
-            if (candidate['kind'] in {'heading', 'caption'} or size > base_size * 1.08
+            separate_column = (candidate['bbox'][0] > span[2] + 12
+                               or candidate['bbox'][2] < span[0] - 12)
+            if (candidate['kind'] in {'heading', 'caption'} or candidate.get('is_table') or candidate.get('is_formula')
+                    or separate_column and not spanning or size > base_size * 1.08
                     or candidate['bbox'][1] - span[3] > max(10, base_size * 1.5)
                     or candidate['bbox'][3] < span[1] - 5):
                 break
@@ -535,18 +739,6 @@ def _merge_captions(blocks):
         block['text'] = _join_lines([{'text': b['text']} for b in group])
         block['bbox'] = _union([b['bbox'] for b in group])
         block['_lines'] = [line for b in group for line in b['_lines']]
-        if _TABLE_START.match(block['text']):
-            block['is_table'] = True
-            rows = []
-            for line in sorted(block['_lines'], key=lambda l: (l['bbox'][1], l['bbox'][0])):
-                if rows and abs(line['bbox'][1] - rows[-1][0]['bbox'][1]) < 3:
-                    rows[-1].append(line)
-                else:
-                    rows.append([line])
-            # Tables are read row-wise, regardless of the surrounding two-column
-            # article. The rendered table remains the authoritative alignment.
-            block['text'] = '\n'.join(' | '.join(l['text'] for l in sorted(row, key=lambda l: l['bbox'][0]))
-                                      for row in rows)
         output.append(block)
     return output
 
@@ -554,9 +746,19 @@ def _merge_captions(blocks):
 def _merge_formula_regions(blocks):
     """Keep fractions, scripts and equation numbers in one source-image block."""
     def fragment(block):
+        if block['kind'] in ('heading', 'caption') or block.get('is_table'):
+            return False
         cleaned = re.sub(r'\(cid:\d+\)', '', block['text'])
-        return (len(cleaned) < 36 and len(re.findall(r'[A-Za-z]{3,}', cleaned)) < 3
+        words = re.findall(r'[A-Za-z]{3,}', cleaned)
+        return (len(cleaned) < 36 and (len(words) < 3 or len(words) <= 4 and all(word.isupper() for word in words))
                 and not _PROSE_LEAD.match(cleaned))
+    def same_region(left, right):
+        lc = {line.get('_column') for line in left['_lines']}
+        rc = {line.get('_column') for line in right['_lines']}
+        numbered = bool(re.fullmatch(r'[\(ð]\d{1,3}[a-z]?[\)Þ]', right['text'].strip(), re.I))
+        column_math = lc == rc and lc in ({'left'}, {'right'}) and (left.get('is_formula') or right.get('is_formula'))
+        return (column_math or numbered and lc == rc or _intersect([left['bbox'][0], 0, left['bbox'][2], 1],
+                                                  [right['bbox'][0], 0, right['bbox'][2], 1], 35))
     output, index = [], 0
     while index < len(blocks):
         block = blocks[index]
@@ -564,7 +766,8 @@ def _merge_formula_regions(blocks):
         if fragment(block):
             for upcoming in blocks[index + 1:index + 6]:
                 if (upcoming['bbox'][1] - block['bbox'][3] > 18
-                        or block['bbox'][1] - upcoming['bbox'][3] > 18):
+                        or block['bbox'][1] - upcoming['bbox'][3] > 18
+                        or not same_region(block, upcoming)):
                     break
                 if upcoming.get('is_formula'):
                     upcoming_formula = True
@@ -583,6 +786,8 @@ def _merge_formula_regions(blocks):
             if (not candidate.get('is_formula') and not fragment(candidate)):
                 break
             if candidate['bbox'][1] - box[3] > 15 or box[1] - candidate['bbox'][3] > 15:
+                break
+            if not same_region(block, candidate):
                 break
             group.append(candidate)
             index += 1
@@ -713,10 +918,18 @@ def extract_document(source_path, asset_dir):
             width, height = float(page.width), float(page.height)
             lines = _lines(page)
             visible_lines = [l for l in lines if not _is_running(l, width, height, number)]
-            body_sizes = [round(c['size'], 1) for c in page.chars if c.get('text', '').isalpha() and 6 <= c['size'] <= 14]
+            tables = _table_blocks(page, visible_lines)
+            figure_boxes = _graphic_candidates(page, visible_lines, [table['bbox'] for table in tables])
+            excluded = figure_boxes + [table['bbox'] for table in tables]
+            body_sizes = [round(c['size'], 1) for c in page.chars if c.get('text', '').isalpha() and 6 <= c['size'] <= 14
+                          and not any(_inside((c['x0'] + c['x1']) / 2, (c['top'] + c['bottom']) / 2, box) for box in excluded)]
             body_size = statistics.mode(body_sizes) if body_sizes else 9
-            figure_boxes = _graphic_candidates(page, visible_lines)
-            local = _merge_formula_regions(_merge_captions(_ordered_blocks(visible_lines, width, body_size, figure_boxes)))
+            visible_lines = _caption_columns(visible_lines, width, figure_boxes)
+            local = _ordered_blocks(visible_lines, width, body_size, figure_boxes + [table['bbox'] for table in tables])
+            for table in tables:
+                position = next((i for i, block in enumerate(local) if block['bbox'][1] > table['bbox'][1]), len(local))
+                local.insert(position, table)
+            local = _merge_formula_regions(_merge_captions(local, figure_boxes, width))
             if number == 1:
                 local = _merge_frontmatter(local, lines, str((pdf.metadata or {}).get('Author', '')).strip())
             if not local and not page.chars:
@@ -732,7 +945,13 @@ def extract_document(source_path, asset_dir):
                 if references and block['kind'] != 'heading':
                     block['kind'] = 'reference'
                 box = _norm(block['bbox'], width, height)
-                if block['is_formula']:
+                if block.get('is_table'):
+                    image = _crop_extracted_region(asset_dir, number, box, f'table-{number:03}-{index:03}.jpg')
+                    if image:
+                        block['image'] = image
+                    else:
+                        warnings.append(f'第 {number} 页有表格位于页面范围之外；请对照原 PDF。')
+                elif block['is_formula']:
                     image = _crop_extracted_region(asset_dir, number, box, f'equation-{number:03}-{index:03}.jpg')
                     if image:
                         block['image'] = image
@@ -747,12 +966,6 @@ def extract_document(source_path, asset_dir):
                     else:
                         warnings.append(f'第 {number} 页有数学符号位于页面范围之外；请对照原 PDF。')
                     block['text'] = re.sub(r'\(cid:\d+\)', '⟦原文数学符号⟧', block['text'])
-                elif block.get('is_table'):
-                    image = _crop_extracted_region(asset_dir, number, box, f'table-{number:03}-{index:03}.jpg')
-                    if image:
-                        block['image'] = image
-                    else:
-                        warnings.append(f'第 {number} 页有表格位于页面范围之外；请对照原 PDF。')
                 block['bbox'] = box
                 geometry = ','.join(str(round(v, 5)) for v in box)
                 block['source_key'] = f'p{number}-g' + hashlib.sha256(geometry.encode()).hexdigest()[:12]
@@ -766,19 +979,6 @@ def extract_document(source_path, asset_dir):
                                       and b['bbox'][1] * height >= box[3] - 10
                                       and b['bbox'][1] * height - box[3] < 100]
                 caption = candidate_captions[0]['text'] if candidate_captions else ''
-                # Caption continuation may occupy the other column at the
-                # same vertical position, so retain it as part of the caption.
-                if candidate_captions:
-                    cb = candidate_captions[0]['bbox']
-                    continuation = [b for b in local if b not in candidate_captions
-                                    and b['kind'] == 'paragraph'
-                                    and abs(b['bbox'][1] - cb[1]) < .018
-                                    and b['bbox'][0] > cb[0] + .2
-                                    and b['bbox'][3] < cb[3] + .02]
-                    if continuation:
-                        caption += ' ' + ' '.join(b['text'] for b in continuation)
-                        for b in continuation:
-                            b['kind'] = 'caption'
                 fid = len(figures) + 1
                 name = f'figure-{fid:03}.jpg'
                 normalized = _norm(box, width, height)
@@ -804,4 +1004,4 @@ def extract_document(source_path, asset_dir):
         warnings.append('未可靠检测到论文插图，暂以首页为封面；可在原文中查看图像。')
     return {'metadata': metadata, 'pages': pages, 'blocks': blocks, 'figures': figures,
             'cover': cover, 'warnings': warnings,
-            'extraction': {'version': 4, 'method': 'gutter-aware-two-column', 'ocr': False}}
+            'extraction': {'version': 6, 'method': 'region-aware-two-column', 'ocr': False}}

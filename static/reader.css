@@ -202,6 +202,7 @@
   scrollbar-gutter: stable;
 }
 .reader-dialog .reader-page-section {
+  position: relative;
   width: var(--pdf-page-width, 100%);
   min-width: var(--pdf-page-width, 100%);
   margin: 0 auto 24px;
@@ -244,35 +245,6 @@
 }
 .reader-dialog .paper-page > img:not([src]) {
   visibility: hidden;
-}
-.reader-dialog .page-overlays {
-  position: absolute;
-  inset: 0;
-}
-.reader-dialog .block-overlay {
-  position: absolute;
-  display: block;
-  padding: 0;
-  cursor: pointer;
-  border: 1px solid transparent;
-  border-radius: 2px;
-  background: transparent;
-}
-.reader-dialog .block-overlay:hover {
-  border-color: #52948188;
-  background: #5ca78c22;
-}
-.reader-dialog .block-overlay.highlighted {
-  background: #eec72d44;
-}
-.reader-dialog .block-overlay.selected {
-  border-color: #247866aa;
-  background: #3d9c8333;
-  box-shadow: 0 0 0 1px #24786655;
-}
-.reader-dialog .block-overlay:focus-visible {
-  outline: 2px solid #247866;
-  outline-offset: 1px;
 }
 .reader-dialog .page-retry {
   position: absolute;
@@ -354,112 +326,6 @@
 }
 .reader-dialog .translation-page {
   margin-bottom: calc(30px * var(--reader-content-scale, 1));
-}
-.reader-dialog .reader-source-text.is-marker {
-  font-size: 0.72em;
-  vertical-align: super;
-  white-space: nowrap;
-}
-.reader-dialog .reader-structure-message {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 0.8em;
-  padding: 5px 0 10px;
-}
-.reader-dialog .reader-structure-message .button {
-  font-size: 1em;
-  min-height: 30px;
-  padding: 3px 9px;
-}
-.reader-dialog .translation-block {
-  position: relative;
-  padding: 10px 12px;
-  margin: 0 -12px 8px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  cursor: text;
-  transition: background-color 0.12s;
-}
-.reader-dialog .translation-block:hover {
-  background: var(--green-soft);
-}
-.reader-dialog .translated-text {
-  font-family: var(--system-font, sans-serif);
-  font-size: var(--reader-font-size, 18px);
-  color: var(--text);
-  line-height: 1.9;
-  letter-spacing: 0.01em;
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.reader-dialog .translation-block.is-heading .translated-text {
-  font-family: var(--system-font, sans-serif);
-  font-size: calc(var(--reader-font-size, 18px) * 1.16);
-  color: var(--ink);
-  font-weight: 650;
-}
-.reader-dialog .translation-block.untranslated .translated-text {
-  font-family: var(--system-font, sans-serif);
-  font-size: var(--reader-font-size, 18px);
-  line-height: 1.85;
-  color: var(--text);
-}
-.reader-dialog .translation-block.is-caption .translated-text {
-  font-family: var(--system-font, sans-serif);
-  font-size: var(--reader-font-size, 18px);
-  color: var(--text);
-}
-.reader-dialog .block-label {
-  font-size: calc(11.68px * var(--reader-content-scale, 1));
-  color: var(--muted);
-  margin-bottom: calc(6px * var(--reader-content-scale, 1));
-  letter-spacing: 0;
-}
-.reader-dialog .block-editor {
-  border-top: 1px solid var(--line);
-  margin-top: 12px;
-  padding-top: 12px;
-  cursor: default;
-}
-.reader-dialog .block-editor .field {
-  font-family: var(--system-font, sans-serif);
-  font-size: 0.86em;
-}
-.reader-dialog .block-editor textarea {
-  font-family: var(--system-font, sans-serif);
-  font-size: var(--reader-font-size, 18px);
-  color: var(--text);
-  line-height: 1.8;
-  min-height: 120px;
-  background: var(--field-bg, var(--paper));
-  border-color: var(--line);
-}
-.reader-dialog .block-editor .button {
-  font-size: 0.84em;
-  min-height: 34px;
-  padding: 6px 12px;
-}
-.reader-dialog .reader-editor-actions {
-  display: flex;
-  gap: 8px;
-}
-.reader-dialog .reader-formula-image,
-.reader-dialog .reader-table-image {
-  max-width: 100%;
-  height: auto;
-  object-fit: contain;
-  background: #fff;
-}
-.reader-dialog .reader-formula-image {
-  max-height: 200px;
-}
-.reader-dialog .reader-table-image {
-  margin-top: calc(12px * var(--reader-content-scale, 1));
 }
 .reader-dialog .reader-error {
   color: var(--muted);
@@ -665,14 +531,10 @@
 .reader-dialog .reader-notes .button {
   align-self: flex-start;
 }
-.reader-dialog .reader-notes .save-hint,
-.reader-dialog .block-editor .save-hint {
+.reader-dialog .reader-notes .save-hint {
   font-size: 0.8em;
   color: var(--muted);
   overflow-wrap: anywhere;
-}
-.reader-dialog .reader-editor-actions {
-  margin-top: 10px;
 }
 @media (max-width: 1000px) {
   .reader-dialog .reader-workspace {
@@ -736,19 +598,45 @@
     scroll-behavior: auto !important;
   }
 }
-.reader-inline-figure { margin: calc(19.2px * var(--reader-content-scale, 1)) 0 calc(10.4px * var(--reader-content-scale, 1)); max-width: 100%; overflow-x: auto; }
-.reader-source-image { max-width: 100%; overflow-x: auto; }
-.reader-inline-figure img,
-.reader-dialog .reader-source-image img { display: block; width: var(--reader-image-width, 100%); max-width: none; max-height: none; height: auto; object-fit: contain; margin-inline: auto; }
-.reader-dialog .reader-source-page { padding: calc(18px * var(--reader-content-scale, 1)); border: 1px solid var(--line); background: var(--reader-paper); border-radius: 3px; height: auto; overflow: visible; }
-.reader-dialog .reader-layout .reader-source-page { max-width: none; }
-.reader-dialog .reader-source-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: calc(28px * var(--reader-content-scale, 1)); align-items: start; }
-.reader-dialog .reader-source-column { min-width: 0; }
-.reader-dialog .reader-source-page .translation-block.is-title .translated-text { font-size: calc(var(--reader-font-size, 18px) * 1.4); font-weight: 700; line-height: 1.45; }
 .reader-dialog .reader-source-page-footer { margin-top: calc(20px * var(--reader-content-scale, 1)); padding-top: 8px; border-top: 1px solid var(--line); text-align: center; color: var(--muted); font-size: 12px; }
-.reader-dialog .reader-inline-figure { break-after: avoid; }
+.reader-pdf-layout-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.reader-pdf-layout-info { padding: 8px 12px; line-height: 1.5; display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 8px; }
+.reader-pdf-diagnostics summary { cursor: pointer; color: var(--muted); }
+.reader-pdf-diagnostics[open] { flex-basis: 100%; }
+.reader-dialog .reader-pdf-layout-page { padding: 0; border: 0; background: transparent; overflow-x: auto; }
+.reader-dialog .reader-pdf-layout-page .paper-page { width: calc(var(--reader-layout-page-width, 100%) * var(--reader-content-scale, 1)); max-width: none; margin-inline: auto; }
+.reader-dialog .reader-pdf-layout-page img { display: block; width: 100%; height: auto; user-select: none; }
+.reader-dialog .reader-pdf-page > canvas { display: block; width: 100%; height: 100%; }
+/* TextLayer rules adapted from PDF.js 6.4.299 (Apache-2.0); see vendor/pdfjs/LICENSE. */
+.reader-dialog .reader-pdf-page > .pdf-text-layer {
+  --user-unit: 1; --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px; --scale-round-y: 1px; --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  color-scheme: only light; position: absolute; inset: 0; text-align: initial;
+  overflow: clip; opacity: 1; line-height: 1; letter-spacing: normal; word-spacing: normal;
+  text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; caret-color: CanvasText;
+}
+.reader-dialog .pdf-text-layer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0 0; user-select: text; }
+.reader-dialog .pdf-text-layer > :not(.markedContent),
+.reader-dialog .pdf-text-layer .markedContent span:not(.markedContent) {
+  --font-height: 0; --scale-x: 1; --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.reader-dialog .pdf-text-layer .markedContent { display: contents; }
+.reader-dialog .pdf-text-layer span[role="img"] { user-select: none; cursor: default; }
+.reader-dialog .pdf-text-layer ::selection { background: #88b5e680; color: transparent; }
+.reader-dialog .reader-pdf-error { position: absolute; inset: 30% 12px auto; font-size: 14px; line-height: 1.5; text-align: center; }
 .reader-dialog .reader-chrome-collapsed > .reader-topbar,
 .reader-dialog .reader-chrome-collapsed > .reader-viewbar,
 .reader-dialog .reader-chrome-collapsed .pane-bar,
 .reader-dialog .reader-chrome-collapsed .reader-thumbs { display: none !important; }
 .reader-dialog #reader-expand-toolbar { position: absolute; left: 12px; top: 6px; z-index: 20; padding: 4px 9px; min-height: 26px; font-size: 12px; opacity: .8; }
+
+/* 未提交译文时只显示原 PDF，覆盖窄窗口的三行分栏规则。 */
+.reader-dialog .reader-layout.reader-original-only {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.reader-dialog .reader-layout > [hidden] { display: none; }

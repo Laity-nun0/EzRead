@@ -34,19 +34,20 @@ assert.equal(journalContext.journalOf({ paper_type: "conference", conference_nam
 assert.equal(journalContext.journalOf({ paper_type: "conference", conference_name: "Unrecognized Conference" }), "会议简称待补充");
 
 const cardContext = {
-  state: { settings: { translation_model: "", translation_reasoning_effort: "" } },
-  modelCatalog: { default_model_id: "gpt-6-sol", models: [{ model: "gpt-6-sol", default_reasoning_effort: "medium" }] },
+  state: { settings: {}, status: { configuration: {provider:"deepseek",model:"deepseek-flash"} } },
   translationOf: paper => paper.translation || {},
 };
 vm.createContext(cardContext);
 vm.runInContext(section("function cardTranslationLabel(", "function paperType(") + "globalThis.cardTranslationLabel = cardTranslationLabel; globalThis.cardModelConfig = cardModelConfig;", cardContext);
-assert.equal(cardContext.cardTranslationLabel({ translation: { total: 10, current_done: 9, status: "running" } }), "全文翻译");
-assert.equal(cardContext.cardTranslationLabel({ translation: { total: 10, current_done: 10, status: "running" } }), "已翻译");
-assert.equal(cardContext.cardTranslationLabel({ translation: { total: 10, current_done: 0, status: "complete" } }), "全文翻译");
-assert.equal(cardContext.cardModelConfig({ paper_ai: {} }).model, "gpt-6-sol");
-assert.equal(cardContext.cardModelConfig({ paper_ai: {} }).effort, "medium");
-assert.equal(cardContext.cardModelConfig({ paper_ai: { model: "gpt-6-astra", reasoning_effort: "high" } }).effort, "high");
-assert.equal(cardContext.cardModelConfig({ paper_ai: {}, translation: { current_done: 3 } }).legacyTranslation, true);
+assert.equal(cardContext.cardTranslationLabel({ translation: { total: 10, current_done: 9, status: "running" } }), "保留版式翻译");
+assert.equal(cardContext.cardTranslationLabel({ translation: { total: 10, current_done: 10, status: "running" } }), "保留版式翻译");
+assert.equal(cardContext.cardTranslationLabel({ translation: { total: 10, current_done: 0, status: "complete" } }), "保留版式翻译");
+assert.equal(cardContext.cardTranslationLabel({ pdf_layout_translation: { current: { id: "version" }, status: "paused" } }), "版式译文");
+assert.equal(cardContext.cardTranslationLabel({ pdf_layout_translation: { done: 10, total: 10, status: "error" } }), "保留版式翻译");
+assert.equal(cardContext.cardModelConfig({ paper_ai: {} }).model, "deepseek-flash");
+assert.equal(cardContext.cardModelConfig({ paper_ai: {} }).provider, "deepseek");
+assert.equal(cardContext.cardModelConfig({ paper_ai: { model: "gpt-6-astra", reasoning_effort: "high" } }).legacy, true);
+assert.equal(cardContext.cardModelConfig({ paper_ai: {provider:"openai",model:"fixed-model"} }).model,"fixed-model");
 
 const daysAgo = days => new Date(Date.now() - days * 86400000).toISOString();
 const filterValues = { "filter-journal": "", "filter-tier": "", "filter-type": "", sort: "imported", "sort-direction": "desc" };

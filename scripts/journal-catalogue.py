@@ -1,4 +1,4 @@
-"""Codex-friendly journal catalogue CLI. Same validation and storage as settings."""
+"""Local journal catalogue maintenance CLI. Same validation and storage as settings."""
 import argparse
 import json
 from pathlib import Path

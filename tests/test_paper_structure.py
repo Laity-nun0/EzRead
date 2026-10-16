@@ -101,7 +101,11 @@ class StructureTests(unittest.TestCase):
             data = Path(folder)
             jobs = queue.Queue()
             with patch.object(server, 'DATA', data), patch.object(server, 'LIBRARY', data / 'library'), \
-                    patch.object(server, 'STRUCTURE_JOBS', jobs), patch.object(server, 'STRUCTURE_QUEUED', set()):
+                    patch.object(server, 'STRUCTURE_JOBS', jobs), patch.object(server, 'STRUCTURE_QUEUED', set()), \
+                    patch('ezread.api_settings.resolve_config', return_value={
+                        'provider': 'deepseek', 'base_url': 'https://example.invalid',
+                        'model': 'mock', 'max_output_tokens': 8192}), \
+                    patch('ezread.api_settings.get_api_key', return_value='synthetic-key'):
                 server.init_db()
                 doc = copy.deepcopy(self.doc)
                 doc.update(id='a'*16, hash='test', deleted=False)
@@ -109,14 +113,13 @@ class StructureTests(unittest.TestCase):
                 server.schedule_structure(doc['id']); server.schedule_structure(doc['id'])
                 self.assertEqual(jobs.qsize(), 1)
                 self.assertEqual(server.get_doc(doc['id'])['reading_structure']['status'], 'queued')
-                def fake_refine(snapshot, config):
+                def fake_refine(snapshot, config, **kwargs):
                     server.update_doc(doc['id'], lambda d: d.update(notes='written during semantic check'))
                     result = paper_structure.organize(snapshot)
                     result.update(status='ready', method='local+ai')
                     return result
                 with patch.object(jobs, 'get', side_effect=[doc['id'], EOFError]), \
                         patch.object(jobs, 'task_done'), \
-                        patch('codex_models.resolve_config', return_value={'model':'mock','reasoning_effort':'low'}), \
                         patch.object(paper_structure, 'refine', side_effect=fake_refine):
                     with self.assertRaises(EOFError): server.structure_worker()
                 saved = server.get_doc(doc['id'])

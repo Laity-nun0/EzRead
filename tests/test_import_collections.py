@@ -21,6 +21,11 @@ class ImportCollectionTests(unittest.TestCase):
         for name, value in [('DATA', data), ('LIBRARY', data / 'library'), ('STRUCTURE_JOBS', self.jobs), ('STRUCTURE_QUEUED', set())]:
             p = patch.object(server, name, value)
             p.start(); self.addCleanup(p.stop)
+        for p in (patch('ezread.api_settings.resolve_config', return_value={
+                    'provider': 'deepseek', 'base_url': 'https://example.invalid',
+                    'model': 'mock', 'max_output_tokens': 8192}),
+                  patch('ezread.api_settings.get_api_key', return_value='synthetic-key')):
+            p.start(); self.addCleanup(p.stop)
         server.init_db()
         self.doc = {'id': 'a'*16, 'hash': 'test', 'title': 'Optical Tactile Sensing for Aerial Robots',
             'abstract': 'A tactile sensor enables contact control of aerial robots.', 'deleted': False,
@@ -33,7 +38,6 @@ class ImportCollectionTests(unittest.TestCase):
     def run_worker(self, refine):
         with patch.object(self.jobs, 'get', side_effect=[self.doc['id'], EOFError]), \
                 patch.object(self.jobs, 'task_done'), \
-                patch('codex_models.resolve_config', return_value={'model': 'mock', 'reasoning_effort': 'low'}), \
                 patch.object(paper_structure, 'refine', side_effect=refine) as call:
             with self.assertRaises(EOFError): server.structure_worker()
         return call
@@ -93,7 +97,11 @@ class ImportCollectionTests(unittest.TestCase):
 
     def test_import_unassigned_and_duplicate_keeps_manual_assignment(self):
         extracted = {'metadata': {'title': self.doc['title']}, 'blocks': self.doc['blocks'], 'pages': [{'number': 1}]}
-        with patch('pdf_tools.extract_document', return_value=copy.deepcopy(extracted)):
+        def extract(source, assets):
+            (assets / 'original.pdf').write_bytes(source.read_bytes())
+            (assets / 'page-001.jpg').write_bytes(b'page')
+            return copy.deepcopy(extracted)
+        with patch('pdf_tools.extract_document', side_effect=extract):
             first = server.import_pdf(b'%PDF-1.7 test-import', 'test.pdf')
             self.assertEqual(first['collection'], '')
             self.assertNotIn('collection_assignment', first)
@@ -107,7 +115,11 @@ class ImportCollectionTests(unittest.TestCase):
             self.assertEqual(self.jobs.qsize(), 1)
 
     def test_scan_unassigned_without_model_job(self):
-        with patch('pdf_tools.extract_document', return_value={'metadata': {}, 'blocks': [], 'pages': [{'number': 1}]}):
+        def extract(source, assets):
+            (assets / 'original.pdf').write_bytes(source.read_bytes())
+            (assets / 'page-001.jpg').write_bytes(b'page')
+            return {'metadata': {}, 'blocks': [], 'pages': [{'number': 1}]}
+        with patch('pdf_tools.extract_document', side_effect=extract):
             result = server.import_pdf(b'%PDF-1.7 scan', 'scan.pdf')
         self.assertEqual(result['collection'], '')
         self.assertNotIn('collection_assignment', result)
@@ -116,7 +128,7 @@ class ImportCollectionTests(unittest.TestCase):
     def test_worker_no_collection_context_and_no_membership_change(self):
         server.schedule_structure(self.doc['id'])
         call = self.run_worker(lambda *args, **kwargs: self.result())
-        self.assertEqual(call.call_args.kwargs, {})
+        self.assertEqual(set(call.call_args.kwargs), {'runner', 'cancel_event'})
         saved = server.get_doc(self.doc['id'])
         self.assertEqual(saved['reading_structure']['status'], 'ready')
         self.assertEqual(saved['collection'], '')

@@ -13,14 +13,14 @@ const state = {
   reader: { id: "paper1", pages: [{ number: 1 }, { number: 2 }, { number: 3 }], blocks: [{ id: "b1", page: 1 }, { id: "b2", page: 2 }], read_page: 1 },
   readerPage: 2, zoom: 125,
 };
-let storageFail = false, apiHandler = async () => ({}), patchHandler = async () => ({}), closes = 0;
+let storageFail = false, apiHandler = async () => ({}), closes = 0;
 const dialog = { open: true, close() { this.open = false; closes++; } };
 nodes.set("#reader-dialog", dialog);
 nodes.set("#reader-content", { inert: false });
 nodes.set("#reader-save-state", { textContent: "" });
 nodes.set("#reader-notes-hint", { textContent: "" });
 const context = {
-  state, console, readSaveTimer: null, performance: { now: () => 1000 },
+  readerPdfLayoutActive: () => false, state, console, readSaveTimer: null, performance: { now: () => 1000 },
   setTimeout: () => 1, clearTimeout() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {},
   localStorage: { getItem: key => storage.get(key) || null, setItem(key, value) { if (storageFail) throw Error("quota"); storage.set(key, value); }, removeItem: key => storage.delete(key) },
   $: selector => nodes.get(selector) || null, $$: (selector, root) => root?.nodes?.[selector] || [],
@@ -31,8 +31,6 @@ const context = {
 vm.createContext(context);
 vm.runInContext(source + "\nglobalThis.R = readerRuntime;", context);
 const R = context.R;
-vm.runInContext("patchBlock = (...args) => testPatch(...args); refreshBlock = () => {}; findBlockNode = () => null;", context);
-context.testPatch = (...args) => patchHandler(...args);
 function box(top, height, dataset) {
   return { dataset, getBoundingClientRect: () => ({ top, bottom: top + height, height, left: 0, right: 500, width: 500 }) };
 }
@@ -46,20 +44,11 @@ const translated = {
   id: "translation-scroll", scrollTop: 300, scrollLeft: 0, clientHeight: 600,
   getBoundingClientRect: () => ({ top: 100, left: 0, right: 500 }),
   scrollTo(value) { this.last = value; this.scrollTop = value.top; this.scrollLeft = value.left; },
-  nodes: { ".translation-block": [box(50, 200, { blockId: "b2", page: "2" })] },
+  nodes: { ".reader-pdf-layout-page": [box(50, 200, { page: "2" })] },
 };
 nodes.set("#original-scroll", original); nodes.set("#translation-scroll", translated);
 
 async function main() {
-  const originalPages = {pages:[{number:1},{number:2}],blocks:[
-    {id:'a',page:1,bbox:[.1,.1,.45,.2]}, {id:'b',page:1,bbox:[.1,.3,.45,.4]},
-    {id:'c',page:1,bbox:[.55,.1,.9,.2]}, {id:'d',page:1,bbox:[.55,.3,.9,.4]},
-    {id:'e',page:2,bbox:[.1,.1,.9,.8]}
-  ],figures:[{id:'wide',page:1,url:'/f.jpg',bbox:[.1,.5,.9,.8]}]};
-  const sourcePages=context.readerSourcePages(originalPages);
-  assert.equal(sourcePages.length,2);assert.equal(sourcePages[0].twoColumns,true);assert.equal(sourcePages[1].twoColumns,false);
-  assert.equal(sourcePages[0].bands[0].left.length,2);assert.equal(sourcePages[0].bands[0].right.length,2);
-  assert.equal(sourcePages[0].bands[1].full.figure.id,'wide');assert.equal(sourcePages[1].bands[0].full.block.id,'e');
   let value = context.readerNormalizePosition({ page: 99, original_offset: 2, translation_offset: -1, translation_block_id: "foreign", zoom: 999, split_ratio: .1, mode: "bad" });
   assert.equal(value.page, 3); assert.equal(value.original_offset, 1); assert.equal(value.translation_offset, 0);
   assert.equal(value.translation_block_id, null); assert.equal(value.zoom, "fit"); assert.equal(value.split_ratio, .3); assert.equal(Object.hasOwn(value, "mode"), false);
@@ -67,8 +56,8 @@ async function main() {
 
   R.split = .64;
   let position = context.readerCapturePosition();
-  assert.equal(position.page, 2); assert.equal(position.original_offset, .3); assert.equal(position.translation_block_id, "b2");
-  assert.equal(position.translation_offset, .25); assert.equal(position.zoom, 125); assert.equal(position.split_ratio, .64);
+  assert.equal(position.page, 2); assert.equal(position.original_offset, .3); assert.equal(position.translation_block_id, null);
+  assert.equal(position.translation_offset, 0); assert.equal(position.zoom, 125); assert.equal(position.split_ratio, .64);
   context.readerRestoreAnchor(original, ".reader-page-section", { key: "2", ratio: .3, offset: 0, scrollTop: 0, scrollLeft: 0 });
   assert.equal(original.last.top, 700);
   const writes = [];
@@ -92,12 +81,21 @@ async function main() {
   assert.equal(JSON.parse(storage.get("ezread-reader-notes:paper1")).value, "version2", "A stale response must not clear the latest note draft.");
   apiHandler = async () => ({}); await context.readerSaveNotes(); assert.equal(R.notes.savedValue, "version2");
 
-  const editor = { paperId: "paper1", blockId: "b2", mode: "translation", text: { value: "revision" }, node: { remove() { this.removed = true; } }, hint: { textContent: "" }, savedValue: "old", saving: null };
-  R.editor = editor; patchHandler = async () => { throw Error("offline"); };
-  await assert.rejects(context.readerSaveEditor(), /offline/);
-  assert.equal(JSON.parse(storage.get("ezread-reader-block:paper1")).value, "revision"); assert.equal(R.editor, editor);
-  patchHandler = async () => ({}); await context.readerSaveEditor(); assert.equal(R.editor, null); assert.equal(storage.has("ezread-reader-block:paper1"), false);
+  for (const rejected of [false, true]) {
+    let settle;
+    apiHandler = async () => new Promise((resolve, reject) => { settle = rejected ? reject : resolve; });
+    const removed = { id: "paper1", value: "deleted note", savedValue: "old", saving: null, timer: null };
+    R.notes = removed;
+    const lateSave = context.readerSaveNotes();
+    removed.released = true; R.notes = null; storage.delete("ezread-reader-notes:paper1");
+    settle(rejected ? Error("deleted") : {}); await lateSave;
+    assert.equal(storage.has("ezread-reader-notes:paper1"), false, "Deleted notes cannot be restored by a late save response.");
+    assert.equal(removed.savedValue, "old");
+  }
 
+  storage.set("ezread-reader-block:paper1", JSON.stringify({value: "legacy draft"}));
+  storage.set("ezread-reader-text-action:paper1", JSON.stringify({value: "legacy selected revision"}));
+  const legacyDrafts = [...storage.entries()].filter(([key]) => /block:|text-action:/.test(key));
   R.notes = { id: "paper1", value: "unsaved", savedValue: "old", saving: null, timer: null };
   storageFail = true; apiHandler = async () => { throw Error("offline"); }; R.savedSignature = "";
   const closed = await context.closeReader(); assert.equal(closed, false); assert.equal(closes, 0); assert.equal(dialog.open, true); assert.equal(nodes.get("#reader-content").inert, false);
@@ -117,7 +115,7 @@ async function main() {
   original.style = { setProperty(name, value) { widths.push(value); } };
   original.addEventListener = (name, handler, options) => { if (name === "wheel") { wheelHandlers.pdf = handler; assert.equal(options.passive, false); } };
   translated.addEventListener = (name, handler, options) => { if (name === "wheel") { wheelHandlers.text = handler; assert.equal(options.passive, false); } };
-  R.originalSignature = JSON.stringify([state.reader.id, state.reader.pages.map(p => [p.number, p.width, p.height, p.image_url]), state.reader.blocks.map(b => [b.id, b.page, b.bbox])]);
+  R.originalSignature = JSON.stringify([state.reader.id, state.reader.pages.map(p => [p.number, p.width, p.height, p.image_url])]);
   context.changePreference = patch => { fontWrites.push(patch); Object.assign(state.settings, patch); context.applyReaderPreferences(); };
   let selectSyncs = 0; context.syncSelectMenus = () => { selectSyncs++; };
   context.readerBindScrolling();
@@ -147,7 +145,7 @@ async function main() {
 
   assert.equal(wheel("text", -120).prevented, true); assert.equal(state.settings.reader_zoom, 110);
   assert.equal(state.zoom, 150); assert.equal(state.settings.ui_font_size, 16);
-  assert.equal(R.translationAnchor.key, "b2"); assert.equal(translated.last.top, 300);
+  assert.equal(R.translationAnchor.key, "2"); assert.equal(translated.last.top, 300);
   wheel("text", 120); assert.equal(state.settings.reader_zoom, 100);
   wheel("text", -120, false); assert.equal(state.settings.reader_zoom, 100);
   state.settings.reader_zoom = 200; const saves = fontWrites.length;
@@ -155,6 +153,15 @@ async function main() {
   state.settings.reader_zoom = 40; assert.equal(wheel("text", 120).prevented, true); assert.equal(fontWrites.length, saves);
   dialog.open = false; assert.equal(wheel("pdf", 120).prevented, false); assert.equal(wheel("text", -120).prevented, false);
   assert.equal(state.zoom, 150); assert.equal(state.settings.reader_font_size, 18);
+  let cancelledFrame;
+  context.cancelAnimationFrame = frame => { cancelledFrame = frame; };
+  context.drawOriginalPage = () => {};
+  context.readerQueuePositionSave = () => {};
+  R.layoutFrame = 77;
+  context.setReaderPage(3);
+  assert.equal(cancelledFrame, 77, "Explicit page navigation cancels a pending layout-anchor restore.");
+  assert.equal(R.layoutFrame, 0);
+  assert.deepEqual([...storage.entries()].filter(([key]) => /block:|text-action:/.test(key)), legacyDrafts);
   console.log("Reader behavior checks passed: anchors, offset persistence, offline drafts, concurrent notes, safe close, keyboard split, Ctrl+wheel PDF/text zoom.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

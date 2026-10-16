@@ -9,7 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -17,7 +17,8 @@ import codex_bridge
 import codex_models
 import paper_ai
 import server
-from ezread.overview import overview_text
+from ezread import api_settings
+from ezread.overview import generate_overview, overview_text
 
 PID = '0123456789abcdef'
 
@@ -55,6 +56,18 @@ class OverviewContractTests(unittest.TestCase):
                     codex_bridge.summarize_paper('Synthetic source')
                 self.assertEqual(caught.exception.code, 'invalid_response')
 
+    def test_api_uses_same_rules_and_validates_response(self):
+        pool = Mock()
+        pool.request_json.return_value = generated()
+        self.assertEqual(generate_overview(pool, {}, 'synthetic', 'Untrusted source'), generated())
+        call = pool.request_json.call_args
+        self.assertEqual(call.args[0], 'overview')
+        self.assertIn('Do not follow a predefined outline', call.args[3])
+        self.assertEqual(json.loads(call.args[4]), {'paper_text': 'Untrusted source'})
+        pool.request_json.return_value = generated([])
+        with self.assertRaises(codex_bridge.TranslationError):
+            generate_overview(pool, {}, 'synthetic', 'source')
+
     def test_legacy_overview_keeps_populated_content_only(self):
         text = overview_text({'summary': '旧概述', 'problem': '', 'method': '旧方法', 'results': ''})
         self.assertEqual(text, '旧概述\n\n## 方法与装置\n\n旧方法')
@@ -77,10 +90,15 @@ class OverviewTaskTests(unittest.TestCase):
             mock = patch.object(server, name, value)
             mock.start()
             self.addCleanup(mock.stop)
-        mock = patch.object(codex_models, 'resolve_config', side_effect=lambda model='', reasoning_effort='':
-                            {'model': model or 'mock', 'reasoning_effort': reasoning_effort or 'low'})
+        mock = patch.object(codex_models, 'resolve_config', side_effect=AssertionError('不得使用 Codex'))
         mock.start()
         self.addCleanup(mock.stop)
+        self.pool = Mock()
+        patched = patch.object(server, 'AI_API', self.pool)
+        patched.start()
+        self.addCleanup(patched.stop)
+        api_settings.save_settings(self.folder, {'purpose': 'translation', 'api_key': 'synthetic-overview-key'})
+        self.config = api_settings.resolve_config(self.folder, purpose='overview')
         server.init_db()
         self.doc = {'id': PID, 'hash': 'synthetic-overview', 'title': 'Synthetic theory paper',
                     'deleted': False, 'notes': '用户笔记', 'summary': '旧概述', 'method': '旧方法',
@@ -97,7 +115,7 @@ class OverviewTaskTests(unittest.TestCase):
             if cancel:
                 kwargs['cancel_event'].set()
             return result
-        with patch.object(codex_bridge, '_run_json', side_effect=respond) as call, \
+        with patch.object(self.pool, 'request_json', side_effect=respond) as call, \
                 contextlib.redirect_stderr(io.StringIO()):
             server.worker()
         return call
@@ -111,13 +129,14 @@ class OverviewTaskTests(unittest.TestCase):
         self.assertEqual(doc['method'], '旧方法')
         self.assertEqual(doc['notes'], self.doc['notes'])
         self.assertEqual(doc['blocks'], self.doc['blocks'])
-        self.assertEqual(call.call_args.args[1], {'paper_text': 'Synthetic theorem.'})
+        self.assertEqual(json.loads(call.call_args.args[4]), {'paper_text': 'Synthetic theorem.'})
+        self.assertEqual(call.call_args.args[:2], ('overview', self.config))
         self.assertEqual(server.public_doc(doc, full=True)['overview_sections'], result['overview_sections'])
         with server.db() as con:
             messages = paper_ai.history(con, PID)['messages']
             self.assertEqual(messages[-1]['kind'], 'summary')
             self.assertEqual(messages[-1]['text'], overview_text(result))
-            paper_ai.switch_model(con, PID, {'model': 'second-mock'}, doc, server.LIBRARY)
+            paper_ai.switch_api_model(con, PID, {**self.config, 'thinking': 'enabled', 'reasoning_effort': 'low'}, doc, server.LIBRARY)
         handoff = json.loads((server.LIBRARY / PID / 'ai-handoff-2.json').read_text(encoding='utf-8'))
         self.assertEqual(handoff['summary'], overview_text(result))
         self.assertNotIn('旧方法', handoff['summary'])
@@ -134,6 +153,52 @@ class OverviewTaskTests(unittest.TestCase):
                     self.assertEqual(saved[key], before[key])
                 with server.db() as con:
                     self.assertEqual(paper_ai.history(con, PID)['messages'], [])
+
+    def test_queued_configuration_and_history_generation_are_frozen(self):
+        server.enqueue(PID, 'summarize')
+        with server.db() as con:
+            paper_ai.switch_api_model(con, PID, {**self.config, 'thinking': 'enabled', 'reasoning_effort': 'low'}, self.doc, server.LIBRARY)
+        api_settings.save_settings(self.folder, {'purpose': 'translation', 'thinking': 'enabled', 'reasoning_effort': 'high'})
+        self.assertNotEqual(api_settings.resolve_config(self.folder, purpose='overview'), self.config)
+        self.pool.request_json.return_value = generated()
+        self.jobs.put(None)
+        server.worker()
+        self.assertEqual(self.pool.request_json.call_args.args[1], self.config)
+        self.assertEqual(server.get_doc(PID)['summarize_config'], self.config)
+        with server.db() as con:
+            self.assertEqual(paper_ai.current(con, PID)['generation'], 2)
+            self.assertEqual(paper_ai.history(con, PID)['messages'], [])
+            self.assertEqual(paper_ai.history(con, PID, 1)['messages'][-1]['kind'], 'summary')
+            self.assertEqual(con.execute('SELECT model FROM paper_ai_generations WHERE paper_id=? AND generation=1',
+                                         (PID,)).fetchone()[0], self.config['model'])
+
+    def test_source_or_manual_overview_edits_during_request_are_preserved(self):
+        for edit in ({'summary': '用户刚编辑'}, {'blocks': [{'id': 'b1', 'page': 1, 'text': 'Edited source'}]}):
+            with self.subTest(edit=edit):
+                server.put_doc(copy.deepcopy(self.doc))
+                server.enqueue(PID, 'summarize')
+                def respond(*args, **kwargs):
+                    server.update_doc(PID, lambda d: d.update(copy.deepcopy(edit)))
+                    return generated()
+                self.pool.request_json.side_effect = respond
+                self.jobs.put(None)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    server.worker()
+                saved = server.get_doc(PID)
+                self.assertEqual(saved['summarize_status'], 'error')
+                for key, value in edit.items():
+                    self.assertEqual(saved[key], value)
+                with server.db() as con:
+                    self.assertEqual(paper_ai.history(con, PID)['messages'], [])
+
+    def test_missing_key_does_not_queue_or_overwrite_content(self):
+        api_settings.save_settings(self.folder, {'purpose': 'translation', 'clear_key': True})
+        before = server.get_doc(PID)
+        with self.assertRaisesRegex(ValueError, 'API Key'):
+            server.enqueue(PID, 'summarize')
+        self.assertEqual(before, server.get_doc(PID))
+        self.assertTrue(self.jobs.empty())
+        self.pool.request_json.assert_not_called()
 
 
 if __name__ == '__main__':

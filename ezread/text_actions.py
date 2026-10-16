@@ -18,7 +18,16 @@ def digest(text):
 
 
 def original_text(block):
-    return block.get('text_override', block.get('text', ''))
+    return block.get('text_override', block.get('extraction_text', block.get('text', '')))
+
+
+def readable_blocks(doc):
+    return [block for block in doc.get('blocks', []) if not block.get('extraction_hidden')]
+
+
+def translatable_blocks(doc):
+    return [block for block in readable_blocks(doc) if block.get('kind') != 'reference'
+            and not block.get('is_formula') and not block.get('is_table') and original_text(block).strip()]
 
 
 def text_of(block, language):
@@ -29,7 +38,8 @@ def text_of(block, language):
 
 def model_document(doc):
     result = copy.deepcopy(doc)
-    for block in result.get('blocks', []): block['text'] = original_text(block)
+    result['blocks'] = [block for block in readable_blocks(result) if not block.get('is_table')]
+    for block in result['blocks']: block['text'] = original_text(block)
     return result
 
 
@@ -48,7 +58,7 @@ def validate_ranges(doc, ranges, limit=20000):
         if language not in ('original', 'translation'): raise ValueError('无效的文字语言。')
         if not isinstance(bid, str) or (bid, language) in seen: raise ValueError('文字范围重复或无效。')
         block = by_id.get(bid)
-        if not block or block.get('is_formula'): raise ValueError('所选正文不存在。')
+        if not block or block.get('is_formula') or block.get('is_table'): raise ValueError('所选正文不存在。')
         text = text_of(block, language)
         start, end, quote = value.get('start'), value.get('end'), value.get('quote')
         if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(text):
@@ -195,21 +205,16 @@ def selected_text(app, pid, data):
 
 
 def translate(app, pid, data):
-    import codex_models, codex_bridge
+    from .selection_api import translate_selection
     from .selection_requests import ensure_current
     selected, ranges = selected_text(app, pid, data)
     event = app.SELECTION_REQUESTS.begin(pid, data)
     progress = lambda value: app.SELECTION_REQUESTS.report(pid, data, value)
     try:
         ensure_current(event)
-        progress({'text': '正在核对登录状态和翻译配置…'})
-        if not app.codex_status().get('authenticated'):
-            raise ValueError('请先在官方 Codex 中登录 ChatGPT 账号。')
-        settings = app.settings()
-        config = codex_models.resolve_config(settings['selection_translation_model'], settings['selection_translation_reasoning_effort'])
-        ensure_current(event)
         target = 'en' if all(r['language'] == 'translation' for r in ranges) else 'zh'
-        result = codex_bridge.translate_selection(selected, **config, target_language=target, cancel_event=event, on_progress=progress, paper_id=pid)
+        result = translate_selection(app, selected, target_language=target, cancel_event=event,
+                                     on_progress=progress, paper_id=pid)
         ensure_current(event)
         # A slow model response must not survive a revision to the source text.
         selected_text(app, pid, data)
@@ -236,7 +241,8 @@ def translate_word(app, pid, data):
 
 
 def retranslate(app, pid, data):
-    import paper_ai, codex_models
+    from .selection_api import translate_blocks
+    from .selection_requests import ensure_current
     doc = app.get_doc(pid)
     ranges = validate_ranges(doc, data.get('ranges'))
     ids = [r['block_id'] for r in ranges]
@@ -244,18 +250,30 @@ def retranslate(app, pid, data):
     source = model_document(doc)
     blocks = [b for b in source['blocks'] if b['id'] in ids and b['text'].strip() and not b.get('is_formula') and b.get('kind') != 'reference']
     if not blocks or sum(len(b['text']) for b in blocks) > 12000: raise ValueError('对应段落过长，请缩小选择范围。')
-    if not app.codex_status().get('authenticated'): raise ValueError('请先在官方 Codex 中登录 ChatGPT 账号。')
-    settings = app.settings()
-    config = codex_models.resolve_config(settings['selection_translation_model'], settings['selection_translation_reasoning_effort'])
-    _, result = paper_ai.translate_batch(app.db, pid, source, blocks, config, None)
-    expected = {b['id']: (b['text'], b.get('translation', '')) for b in blocks}
+    expected = {b['id']: (b['text'], b.get('translation', ''), b.get('source_range_revision')) for b in blocks}
+    event = app.SELECTION_REQUESTS.begin(pid, data)
+    try:
+        ensure_current(event)
+        result = translate_blocks(app, blocks, paper_id=pid, cancel_event=event)
+        ensure_current(event)
+        return _commit_retranslation(app, pid, expected, result, event)
+    finally:
+        app.SELECTION_REQUESTS.finish(pid, data, event)
+
+
+def _commit_retranslation(app, pid, expected, result, event):
+    from .selection_requests import ensure_current
     if not isinstance(result, dict) or set(result) != set(expected) or any(not isinstance(v, str) or not v.strip() for v in result.values()): raise ValueError('模型未完整返回译文，已有内容保持不变。')
     def merge(current):
+        ensure_current(event)
+        ensure_current(app.SHUTDOWN)
         if current.get('deleted'): raise ValueError('文献已移入回收站，本次结果未覆盖内容。')
         if (pid, 'translate') in app.QUEUED: raise TextConflict('全文翻译已开始，本次结果未覆盖新任务。')
         by_id = {b['id']: b for b in current['blocks']}
-        for bid, (english, old_translation) in expected.items():
-            if original_text(by_id[bid]) != english or by_id[bid].get('translation', '') != old_translation:
+        for bid, (english, old_translation, revision) in expected.items():
+            block = by_id.get(bid)
+            if (block is None or original_text(block) != english
+                    or block.get('translation', '') != old_translation or block.get('source_range_revision') != revision):
                 raise TextConflict('翻译期间文字有新修改，本次结果未覆盖新内容。')
         app.archive_translation(current)
         for bid, translation in result.items():

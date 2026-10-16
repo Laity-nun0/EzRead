@@ -1170,9 +1170,6 @@ dialog::backdrop {
   height: 1.15rem;
   accent-color: var(--green);
 }
-.translation-choice-hint {
-  line-height: 1.75;
-}
 .translation-version {
   padding: 1rem 0;
   border-bottom: 1px solid var(--line);

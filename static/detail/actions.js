@@ -2,14 +2,6 @@ async function changeCover(payload) {
   const id = state.detail.id; const data = await api(`/api/papers/${encodeURIComponent(id)}/cover`, { method: "POST", body: payload });
   if (data.paper) updatePaper(data.paper); await openDetail(id); await loadLibrary(); toast("封面已更新");
 }
-async function translateAction(p, pause = false) {
-  if (!pause) { openTranslationSetup([p]); return; }
-  const data = await api(`/api/papers/${encodeURIComponent(p.id)}/${pause ? "pause" : "translate"}`, { method: "POST", body: {} });
-  if (data.paper) updatePaper(data.paper); await loadLibrary();
-  if (state.detail?.id === p.id && $("#detail-dialog").open) { state.detail = normalizeDetail(await api(`/api/papers/${encodeURIComponent(p.id)}`)); renderDetail(); }
-  if (state.reader?.id === p.id) await refreshReader();
-  toast(pause ? "已请求暂停" : "已加入全文翻译队列");
-}
 async function runPaperTask(task) {
   if (task !== "summarize") throw new Error("此论文任务已取消。");
   const id = state.detail.id; toast("正在整理研究速览…", "success", 7000);
@@ -34,9 +26,9 @@ function openMetadata(p) {
   const save = el("button", { type: "submit", class: "button primary" }, "保存信息");
   form.append(el("div", { class: "inline-fields" }, field("发表时间", input("publication_date", "text", { placeholder: "YYYY-MM-DD，可只填写年份" })), field("发表页码", input("page_range", "text", { placeholder: "例如 38402-38416" }))),
     el("div", { class: "inline-fields" }, field("卷", input("volume")), field("期", input("issue"))), field("文章编号（无传统页码时）", input("article_number")));
-  form.append(el("div", { class: "form-actions" }, button("移入回收站", event => act(async () => {
-    if (!confirm(`将《${titleOf(p)}》移入回收站？原文与笔记会保留，可从回收站恢复。`)) return;
-    await api(`/api/papers/${encodeURIComponent(p.id)}`, { method: "DELETE" }); closeDialog("#edit-dialog"); closeDialog("#detail-dialog"); await loadLibrary(); toast("论文已移入回收站");
+  form.append(el("div", { class: "form-actions" }, button("永久删除", event => act(async () => {
+    if (!confirm(`永久删除《${titleOf(p)}》及其文件、笔记、译文和全部会话？无法在应用内恢复。`)) return;
+    await permanentlyDeletePaper(p.id); closeDialog("#edit-dialog"); closeDialog("#detail-dialog"); await loadLibrary(); toast("论文已永久删除，无法在应用内恢复");
   }, event.currentTarget), "danger", "trash", { style: { marginRight: "auto" } }), button("取消", () => closeDialog("#edit-dialog")), save));
   form.addEventListener("submit", event => { event.preventDefault(); act(async () => {
     const patch = Object.fromEntries(Object.entries(inputs).map(([key, node]) => [key, key === "year" ? node.value === "" ? null : Number(node.value) : node.value.trim()]));

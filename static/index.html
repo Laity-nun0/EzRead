@@ -15,9 +15,11 @@
   <link rel="stylesheet" href="/static/redesign.css">
   <link rel="stylesheet" href="/static/surfaces.css?v=20261005">
   <script src="/static/reader.js" defer></script>
-  <script src="/static/reader-text.js" defer></script>
+  <script src="/static/reader-pdf.js" defer></script>
+  <script src="/static/reader-layout.js" defer></script>
   <script src="/static/paper-chat-markdown.js" defer></script>
   <script src="/static/paper-chat.js" defer></script>
+  <script src="/static/api-translation-ui.js" defer></script>
   <script src="/static/translation-ui.js" defer></script>
   <script src="/static/settings-ui.js" defer></script>
   <script src="/static/journal-catalogue-ui.js" defer></script>
@@ -118,7 +120,7 @@
   </div>
   <dialog id="queue-dialog" class="queue-dialog" aria-labelledby="queue-dialog-title">
     <header class="queue-dialog-heading"><div><h2 id="queue-dialog-title">翻译任务</h2></div><div class="queue-dialog-actions"><button id="refresh-status" class="button secondary">刷新状态</button><button id="queue-close" class="icon-button" aria-label="关闭翻译任务" autofocus><svg class="icon"><use href="#i-close"/></svg></button></div></header>
-    <div id="queue-view" class="queue-dialog-scroll"><div id="codex-status" class="status-panel"></div><div id="usage-status" class="usage-panel"></div><div id="queue-list"></div></div>
+    <div id="queue-view" class="queue-dialog-scroll"><div id="queue-list"></div><details class="queue-api-details"><summary>API 配置与本次用量</summary><div id="api-status" class="status-panel"></div><div id="usage-status" class="usage-panel"></div></details></div>
   </dialog>
   <div id="filter-backdrop" class="filter-backdrop hidden" aria-hidden="true"></div>
   <section id="filter-menu" class="filter-menu hidden" role="region" aria-labelledby="filter-menu-title">

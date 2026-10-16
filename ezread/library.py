@@ -1,10 +1,140 @@
 """Paper metadata, public documents and native file actions."""
 from __future__ import annotations
 from .context import ApplicationContext
+from contextlib import contextmanager
+import json
+import os
 import re
 import shutil
 import sqlite3
+import stat
+import tempfile
 import urllib.parse
+from pathlib import Path
+
+
+def _atomic_write(path, content):
+    handle, temporary = tempfile.mkstemp(prefix=path.name + '-', suffix='.tmp', dir=path.parent)
+    try:
+        with os.fdopen(handle, 'wb') as stream:
+            stream.write(content)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _paper_draft_snapshots(app, pid):
+    snapshots = []
+    try:
+        for filename in ('desktop-close-drafts.json', 'webview2-migration.json'):
+            path = app.DATA / filename
+            if path.is_symlink() or (path.exists() and getattr(path.lstat(), 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                raise ValueError('桌面草稿快照包含链接，未删除。')
+            if not path.exists():
+                continue
+            original = path.read_bytes()
+            document = json.loads(original.decode('utf-8-sig'))
+            values = document.get('values') if filename == 'desktop-close-drafts.json' and isinstance(document, dict) else document
+            if not isinstance(document, dict) or not isinstance(values, dict):
+                raise ValueError('桌面草稿快照格式无效，未删除。')
+            keys = [key for key in values if key.startswith('ezread-reader-') and key.endswith(':' + pid)]
+            if keys:
+                for key in keys:
+                    del values[key]
+                snapshots.append((path, original, json.dumps(document, ensure_ascii=False).encode('utf-8')))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError('桌面草稿快照无法读取，永久删除未完成。') from exc
+    return snapshots
+
+
+@contextmanager
+def paper_cleanup_scope(app: ApplicationContext, pid):
+    """调用方持有文件锁与文献锁；数据库事务须在本作用域内完成提交。"""
+    if not isinstance(pid, str) or not re.fullmatch(r'[a-f0-9]{16}', pid):
+        raise ValueError('无效的文献 ID。')
+    roots = []
+    for parent in (app.LIBRARY, app.DATA / 'clipboard'):
+        if parent.is_symlink() or (parent.exists() and getattr(parent.lstat(), 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise ValueError('文献父目录包含链接，未删除。')
+        root = parent / pid
+        if root.is_symlink() or root.resolve().parent != parent.resolve():
+            raise ValueError('文献目录包含链接或越界，未删除。')
+        if not root.exists():
+            continue
+        for path in (root, *root.rglob('*')):
+            info = path.lstat()
+            if path.is_symlink() or getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                raise ValueError('文献目录包含链接，未删除。')
+        if not root.is_dir():
+            raise ValueError('文献目录不是文件夹，未删除。')
+        roots.append(root)
+    temporary = app.DATA / 'tmp'
+    if temporary.is_symlink() or (temporary.exists() and getattr(temporary.lstat(), 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+        raise ValueError('临时目录包含链接，未删除。')
+    temporary.mkdir(parents=True, exist_ok=True)
+    snapshots = _paper_draft_snapshots(app, pid)
+    backup = Path(tempfile.mkdtemp(prefix='delete-recovery-', dir=temporary))
+    copies = []
+    yielded = False
+    try:
+        for index, root in enumerate(roots):
+            saved = backup / str(index)
+            shutil.copytree(root, saved)
+            copies.append((root, saved))
+        for path, original, _ in snapshots:
+            (backup / path.name).write_bytes(original)
+        for path, _, content in snapshots:
+            _atomic_write(path, content)
+        for root, _ in copies:
+            shutil.rmtree(root)
+        yielded = True
+        yield
+    except Exception as exc:
+        try:
+            for root, saved in copies:
+                shutil.copytree(saved, root, dirs_exist_ok=True)
+            for path, original, _ in snapshots:
+                _atomic_write(path, original)
+        except OSError as restore_error:
+            raise ValueError(f'永久删除失败，恢复副本保留在 {backup}；请勿再次删除：{restore_error}') from exc
+        shutil.rmtree(backup, ignore_errors=True)
+        if yielded:
+            raise
+        raise ValueError(f'永久删除失败，文献与数据库已保留：{exc}') from exc
+    try:
+        shutil.rmtree(backup)
+    except OSError as exc:
+        raise ValueError(f'文献记录已删除，但恢复副本清理失败，永久删除未完成：{backup}') from exc
+
+
+def delete_paper(app: ApplicationContext, pid):
+    """永久删除；文件操作失败时保留数据库并从临时副本恢复。"""
+    import paper_ai
+    from .storage import delete_paper_records
+    if not isinstance(pid, str) or not re.fullmatch(r'[a-f0-9]{16}', pid):
+        raise ValueError('无效的文献 ID。')
+    paper_lock = paper_ai.paper_lock(pid)
+    if not paper_lock.acquire(blocking=False):
+        raise ValueError('论文对话正在执行，请等待其停止后重试永久删除。')
+    try:
+        with app.FILE_ACTION_LOCK, app.LOCK:
+            app.get_doc(pid, include_deleted=True)
+            for (paper_id, kind), event in list(app.CANCEL.items()):
+                if paper_id == pid:
+                    event.set()
+                    app.RESUME_REQUESTED.discard((paper_id, kind))
+            if any(paper_id == pid for paper_id, _ in app.QUEUED) or pid in app.STRUCTURE_QUEUED:
+                raise ValueError('文献后台任务尚未停止，已请求取消可取消的任务；请等待停止后重试永久删除。')
+            try:
+                with paper_cleanup_scope(app, pid):
+                    with app.db() as con:
+                        delete_paper_records(con, pid)
+                    app.DELETED_PAPERS.add(pid)
+            except (OSError, sqlite3.Error) as exc:
+                raise ValueError(f'永久删除失败，文献与数据库已保留：{exc}') from exc
+            return {'ok': True, 'message': '已永久删除文献、笔记、译文和全部会话，无法在应用内恢复。'}
+    finally:
+        paper_lock.release()
 
 
 def paper_file_action(app: ApplicationContext, pid, action):
@@ -27,11 +157,13 @@ def paper_file_action(app: ApplicationContext, pid, action):
     if re.match(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)', filename, re.I):
         filename = '_' + filename
     folder = app.DATA / 'clipboard' / pid
-    folder.mkdir(parents=True, exist_ok=True)
     target = (folder / filename).resolve()
     if not target.is_relative_to((app.DATA / 'clipboard').resolve()):
         raise ValueError('无效的 PDF 文件名。')
     with app.FILE_ACTION_LOCK:
+        # 删除与复制共用文件锁，锁外取得的文献可能已过期。
+        app.get_doc(pid)
+        folder.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
         desktop_files.copy_pdf(target)
     return {'ok': True, 'filename': filename}
@@ -59,8 +191,8 @@ def media_url(pid, filename):
 
 
 def translation_counts(app: ApplicationContext, doc):
-    from .text_actions import original_text
-    target = [b for b in doc.get('blocks', []) if b.get('kind') != 'reference' and not b.get('is_formula') and original_text(b).strip()]
+    from .text_actions import translatable_blocks
+    target = translatable_blocks(doc)
     t = dict(doc.get('translation', {}))
     staging = t.pop('staging', None)
     current_done = sum(bool(b.get('translation', '').strip()) for b in target)
@@ -85,6 +217,7 @@ def public_doc(app: ApplicationContext, doc, full=False):
               'metrics_note', 'conference_rankings', 'read_state', 'reading_structure', 'collection_assignment'}
     hidden.update({'text_annotations', 'text_revision_history', 'text_action_receipts'})
     hidden.update({'team', 'team_sources', 'team_status', 'team_error'})
+    hidden.update({'pdf_layout_translation', 'pdf_layout_current', 'pdf_layout_versions', 'pdf_layout_drafts'})
     out = {k: v for k, v in doc.items() if k not in hidden}
     from .publication import assessment
     out['metadata_enrichment'] = assessment(doc)
@@ -105,6 +238,8 @@ def public_doc(app: ApplicationContext, doc, full=False):
         out.pop(key, None)
     out['cover_url'] = app.media_url(doc['id'], doc.get('cover') or 'page-001.jpg')
     out['translation'] = app.translation_counts(doc)
+    from . import pdf_translations
+    out['pdf_layout_translation'] = pdf_translations.public_state(app, doc, full)
     out['page_count'] = len(doc.get('pages', []))
     out['original_url'] = app.media_url(doc['id'], 'original.pdf')
     structure = doc.get('reading_structure', {})

@@ -15,14 +15,49 @@ async function movePapers(ids, collection) {
   await loadLibrary();
   if (moved) toast(`已将 ${moved} 篇论文移入「${collection}」`);
 }
+async function permanentlyDeletePaper(id) {
+  if (typeof flushDetailNotes === "function") await flushDetailNotes(id);
+  if (typeof readerRuntime !== "undefined" && readerRuntime.notes?.id === id) {
+    clearTimeout(readerRuntime.notes.timer);
+    if (readerRuntime.notes.saving) await readerRuntime.notes.saving.catch(() => {});
+  }
+  await api(`/api/papers/${encodeURIComponent(id)}`, { method: "DELETE" });
+  clearDeletedPaperState(id);
+}
+function clearDeletedPaperState(id) {
+  if (typeof detailNoteSaves !== "undefined") {
+    const entry = detailNoteSaves.get(id);
+    if (entry) { entry.released = true; clearTimeout(entry.timer); detailNoteSaves.delete(id); }
+  }
+  state.selectedPapers.delete(id);
+  if (state.reader?.id === id) {
+    if (typeof readerRuntime !== "undefined") {
+      if (readerRuntime.notes?.id === id) {
+        readerRuntime.notes.released = true;
+        clearTimeout(readerRuntime.notes.timer);
+        readerRuntime.notes = null;
+      }
+      if (typeof readerDispose === "function") readerDispose();
+    }
+    state.reader = null;
+    closeDialog("#reader-dialog");
+  }
+  if (state.detail?.id === id) { state.detail = null; closeDialog("#detail-dialog"); closeDialog("#edit-dialog"); }
+  if (typeof paperChatRuntime !== "undefined") {
+    paperChatRuntime.drafts.delete(id); paperChatRuntime.pending.delete(id);
+    if (paperChatRuntime.paperId === id) { paperChatRuntime.paperId = null; paperChatRuntime.data = null; }
+  }
+  try { removePaperBrowserData(id); }
+  catch { toast("旧文献已清除，但本机阅读草稿清理失败，请检查浏览器存储权限。", "error"); }
+}
 async function deletePapers(ids) {
   let removed = 0;
   for (const id of ids) {
-    try { await api(`/api/papers/${encodeURIComponent(id)}`, { method: "DELETE" }); state.selectedPapers.delete(id); removed++; }
+    try { await permanentlyDeletePaper(id); removed++; }
     catch (error) { toast(`${id}：${error.message}`, "error"); }
   }
   await loadLibrary();
-  if (removed) toast(`已将 ${removed} 篇论文移入回收站`);
+  if (removed) toast(`已永久删除 ${removed} 篇论文，无法在应用内恢复`);
 }
 function closeCardMenu(restoreFocus = false) {
   const id = activeCardMenuId; activeCardMenuId = null;
@@ -99,6 +134,7 @@ function makeDropTarget(node, kind, collection = "") {
     if (!draggingPaperIds.length) return;
     event.preventDefault(); event.stopPropagation();
     const ids = [...draggingPaperIds]; draggingPaperIds = [];
+    if (kind === "trash" && !confirm(`永久删除选中的 ${ids.length} 篇论文及其文件、笔记、译文和全部会话？无法在应用内恢复。`)) return;
     void act(() => kind === "trash" ? deletePapers(ids) : movePapers(ids, collection));
   });
   return node;

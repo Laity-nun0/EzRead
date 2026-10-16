@@ -25,9 +25,12 @@ def init_db(app: ApplicationContext):
             if key not in doc:
                 doc[key] = value
                 changed = True
-        if doc.get('translation', {}).get('status') in ('running', 'queued'):
-            doc['translation']['status'] = 'paused'
-            doc['translation']['error'] = '上次任务已保存，可继续翻译。'
+        if doc.get('translation', {}).get('status') in ('running', 'queued', 'paused', 'error'):
+            doc['translation']['status'] = 'retired'
+            doc['translation']['error'] = '旧正文全文翻译已停用，历史译文和草稿已保留。'
+            changed = True
+        if doc.get('pdf_layout_translation', {}).get('status') in ('running', 'queued'):
+            doc['pdf_layout_translation'].update(status='paused', stage='翻译已暂停', error='上次版式任务已保存，可继续翻译。')
             changed = True
         for kind in ('summarize', 'team'):
             if doc.get(kind + '_status') in ('running', 'queued'):
@@ -64,8 +67,19 @@ def get_doc(app: ApplicationContext, pid, include_deleted=False):
 
 def put_doc(app: ApplicationContext, doc):
     with app.LOCK, app.db() as con:
+        if doc['id'] in getattr(app, 'DELETED_PAPERS', set()):
+            raise ValueError('文献已永久删除，旧任务结果未保存。')
         con.execute('INSERT INTO papers(id,hash,doc,deleted) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET doc=excluded.doc,deleted=excluded.deleted',
                     (doc['id'], doc['hash'], json.dumps(doc, ensure_ascii=False), int(doc.get('deleted', False))))
+
+
+def delete_paper_records(con, pid):
+    """在调用方事务内删除文献及全部会话；兼容尚未创建 AI 表的旧库。"""
+    tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for table, column in (('paper_ai_messages', 'paper_id'), ('paper_ai_generations', 'paper_id'),
+                          ('paper_ai', 'paper_id'), ('papers', 'id')):
+        if table in tables:
+            con.execute(f'DELETE FROM {table} WHERE {column}=?', (pid,))
 
 
 def update_doc(app: ApplicationContext, pid, fn):
