@@ -239,7 +239,11 @@ class DataLocationTests(unittest.TestCase):
                 locations.migrate_library(self.root, self.source, self.target, self.environment)
         identity = subprocess.CompletedProcess([], 0, b'"fixture","S-1-5-21-1-2-3-1000"\r\n', b'')
         rejected = subprocess.CompletedProcess([], 1, b'', b'fixture')
+        accepted = subprocess.CompletedProcess([], 0, b'', b'')
         with patch.object(locations.subprocess, 'run', side_effect=[identity, rejected]):
+            with self.assertRaisesRegex(ValueError, '重置.*文件权限'):
+                self.migrate()
+        with patch.object(locations.subprocess, 'run', side_effect=[identity, accepted, rejected]):
             with self.assertRaisesRegex(ValueError, '文件权限'):
                 self.migrate()
         self.assertFalse(self.target.exists())
@@ -249,6 +253,24 @@ class DataLocationTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'nt', 'Windows NTFS ACL')
     def test_target_acl_is_current_user_only_and_inherited_by_private_files(self):
         self.migrate()
+        self.assert_private_acl(self.target)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows NTFS 显式 ACL')
+    def test_explicit_system_acl_is_removed_before_private_files_are_copied(self):
+        directory = self.base / '显式 权限'
+        directory.mkdir()
+        system = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32'
+        result = subprocess.run([str(system / 'icacls.exe'), str(directory), '/grant', '*S-1-5-18:(OI)(CI)F'],
+                                capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        self.assertEqual(result.returncode, 0)
+        locations._restrict_directory(directory)
+        (directory / 'api-private.json').write_bytes(b'opaque-fixture')
+        nested = directory / 'profile' / 'Local Storage'
+        nested.mkdir(parents=True)
+        (nested / 'cache').write_bytes(b'profile-fixture')
+        self.assert_private_acl(directory)
+
+    def assert_private_acl(self, directory):
         script = ('$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; '
                   '$paths=@($env:EZREAD_TEST_ACL_PATH,($env:EZREAD_TEST_ACL_PATH+"/api-private.json"),'
                   '($env:EZREAD_TEST_ACL_PATH+"/profile/Local Storage/cache")); '
@@ -259,7 +281,7 @@ class DataLocationTests(unittest.TestCase):
                   'sid=$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value; '
                   'inherited=$_.IsInherited}}); me=$me}}) | ConvertTo-Json -Depth 4 -Compress')
         result = subprocess.run(['powershell', '-NoProfile', '-Command', script], capture_output=True,
-                                env={**os.environ, 'EZREAD_TEST_ACL_PATH': str(self.target)},
+                                env={**os.environ, 'EZREAD_TEST_ACL_PATH': str(directory)},
                                 creationflags=subprocess.CREATE_NO_WINDOW)
         self.assertEqual(result.returncode, 0)
         entries = json.loads(result.stdout)

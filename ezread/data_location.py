@@ -178,6 +178,11 @@ def _restrict_directory(directory):
     sid = rows[0][-1] if len(rows) == 1 and len(rows[0]) == 2 else ''
     if identity.returncode or not re.fullmatch(r'S-1-\d+(?:-\d+)+', sid):
         raise ValueError('无法取得当前用户的文件权限身份，未切换目录。')
+    # 新目录也可能自带 SYSTEM 等显式 ACE，先重置再移除继承，避免残留额外授权。
+    reset = subprocess.run([str(system / 'icacls.exe'), str(directory), '/reset'], capture_output=True,
+                           creationflags=subprocess.CREATE_NO_WINDOW, timeout=15)
+    if reset.returncode:
+        raise ValueError('无法重置目标副本的文件权限，未切换目录。')
     result = subprocess.run([str(system / 'icacls.exe'), str(directory), '/inheritance:r',
                              '/grant:r', f'*{sid}:(OI)(CI)F'], capture_output=True,
                             creationflags=subprocess.CREATE_NO_WINDOW, timeout=15)
