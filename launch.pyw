@@ -11,6 +11,7 @@ import urllib.request
 import uuid
 from ezread.config import data_directory as configured_data_directory, listen_port
 from ezread.launching import StartupServer, run_guarded_server, startup_lock
+from ezread.data_location import location_lock
 from desktop_runtime import open_desktop, shell_command
 
 ROOT = Path(__file__).resolve().parent
@@ -173,7 +174,7 @@ def _wait_for_window(process, report, timeout):
     raise RuntimeError('EzRead 桌面窗口启动超时，已停止本次启动。')
 
 
-def start_application():
+def _start_application_at_current_location():
     directory = data_directory()
     with startup_lock(ROOT, directory, URL):
         shell_command(ROOT, directory, URL)  # Missing components must not create a server.
@@ -201,6 +202,12 @@ def start_application():
                 # a cancelled close activates the restored window instead.
                 time.sleep(.15)
             raise RuntimeError('EzRead 上一次关闭尚未完成，重新打开请求已超时，请稍后重试。')
+
+
+def start_application():
+    # 先等待目录迁移，再读取位置，避免排队启动使用迁移前的旧库。
+    with location_lock(ROOT):
+        return _start_application_at_current_location()
 
 
 def main():

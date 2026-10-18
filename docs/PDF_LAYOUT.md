@@ -141,8 +141,6 @@ API 任务只复用同协议、完整请求及术语上下文匹配的缓存，�
 
 `scripts/verify-api-translation.py` 使用临时文献库和真实浏览器，验证 API 设置、密钥留空保存、刷新恢复、宽窄窗口与确认入队；禁止任何 CLI 查询和远端模型请求。`tests/test_translation_api.py` 用回环 HTTP 服务验证四种协议、同连接、无历史、取消、截断和脱敏；`tests/test_pdf_api_tasks.py` 验证实际 API 传输与模拟 BabelDOC 的整合、术语重放、缓存、版本及密钥导出隔离。命令为 `.\.venv\Scripts\python.exe scripts/verify-api-translation.py`，结果位于忽略的 `work/api-translation-verification/`。这些离线检查不证明真实服务可用或译文质量通过。
 
-`scripts/verify-pdf-channel.py` 是遗留适配器的开发诊断工具，会使用真实 CLI；它不属于日常运行路径，也不是 API 离线验收的必要步骤。
-
 多版式验收固定包含双栏正文、复合子图、图文混合表格、行内分式和横向页面。应比较各篇论文的处理结果，保留失败样本，不能以单篇通过或上游退出码 0 宣称全部可靠。`scripts/audit-pdf-layout.py` 可继续读取旧审计产物；新任务使用 `native-text-audit.json`，部分几何覆盖须如实报告。
 
 ## 来源与许可

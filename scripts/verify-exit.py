@@ -129,6 +129,9 @@ def main():
         environment = {**os.environ, 'EZREAD_DATA_DIR': str(data), 'EZREAD_TEST_APP_ROOT': str(app_root),
                        'EZREAD_TEST_CLOSE_DELAY_MS': '1000',
                        'NO_PROXY': '127.0.0.1,localhost', 'PYTHONIOENCODING': 'utf-8'}
+        # 使用真实解释器 PID 时仍加载调用方的项目虚拟环境依赖，不安装到全局。
+        if sys.prefix != sys.base_prefix:
+            environment['PYTHONPATH'] = str(Path(sys.prefix) / 'Lib/site-packages')
         instances = []
         crash_notes = '关闭中浏览器异常前保留的测试草稿'
         crash_port = None

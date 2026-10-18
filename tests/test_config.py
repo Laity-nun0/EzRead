@@ -26,6 +26,17 @@ class ConfigurationTests(unittest.TestCase):
     def test_old_directory_still_resolves_to_the_existing_library(self):
         self.assertEqual(data_directory(ROOT, {'TUDU_DATA_DIR': 'work/existing'}), ROOT / 'work' / 'existing')
 
+    def test_saved_location_wins_over_installer_default_but_not_explicit_override(self):
+        chosen = ROOT / 'work' / 'chosen-library'
+        with patch('ezread.data_location.saved_directory', return_value=chosen) as saved:
+            self.assertEqual(data_directory(ROOT, {'EZREAD_DEFAULT_DATA_DIR': str(ROOT / 'work/default')}), chosen)
+            saved.assert_called_once()
+            saved.reset_mock()
+            self.assertEqual(data_directory(ROOT, {'EZREAD_DATA_DIR': 'work/explicit'}), ROOT / 'work/explicit')
+            saved.assert_not_called()
+        with patch('ezread.data_location.saved_directory', return_value=None):
+            self.assertEqual(data_directory(ROOT, {'EZREAD_DEFAULT_DATA_DIR': str(chosen)}), chosen)
+
     def test_model_and_executable_aliases_use_the_same_precedence(self):
         for kind in ('CODEX_PATH', 'CODEX_MODEL'):
             new, previous = 'EZREAD_' + kind, 'TUDU_' + kind

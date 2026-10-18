@@ -32,8 +32,8 @@ __pycache__/
 *.jpeg
 *.png
 !static/*.png
-!assets/branding/*.png
 !docs/images/library.png
+!docs/images/library-dark.png
 !docs/images/reader.png
 !docs/images/journal-tiers.png
 !docs/images/translation-settings.png

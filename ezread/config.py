@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Mapping
 
-VERSION = '3.5.2'
+VERSION = '3.5.3'
 _LEGACY_ENV = {
     'EZREAD_DATA_DIR': 'TUDU_DATA_DIR',
     'EZREAD_CODEX_PATH': 'TUDU_CODEX_PATH',
@@ -23,7 +23,13 @@ def environment_value(name: str, default: str = '', environment: Mapping[str, st
 
 def data_directory(root: Path, environment: Mapping[str, str] | None = None) -> Path:
     value = environment_value('EZREAD_DATA_DIR', environment=environment)
-    directory = Path(value) if value.strip() else root / 'data'
+    if value.strip():
+        directory = Path(value)
+    else:
+        from .data_location import saved_directory
+        saved = saved_directory(root, environment)
+        env = os.environ if environment is None else environment
+        directory = saved or Path(env.get('EZREAD_DEFAULT_DATA_DIR') or root / 'data')
     if not directory.is_absolute():
         directory = root / directory
     return directory.resolve()

@@ -173,7 +173,7 @@ def handler_for(app: ApplicationContext):
                             if (file.is_file() and 'api-diagnostics' not in file.relative_to(app.LIBRARY).parts
                                     and file.suffix.lower() in ('.pdf', '.jpg', '.png', '.json')):
                                 z.write(file, 'data/library/' + file.relative_to(app.LIBRARY).as_posix())
-                        z.writestr('RESTORE.txt', f'关闭 EzRead 窗口与对应后台服务后，将本备份中 data 文件夹的完整内容复制到文献库数据目录：\n{app.DATA}\n恢复前先完整备份目标数据目录，不直接合并两份数据库。默认文献库位于程序目录下的 data，EZREAD_DATA_DIR 可指定其他目录。library.json 可用于其他软件读取。')
+                        z.writestr('RESTORE.txt', f'关闭 EzRead 窗口与对应后台服务后，将本备份中 data 文件夹的完整内容复制到文献库数据目录：\n{app.DATA}\n恢复前先完整备份目标数据目录，不直接合并两份数据库。安装版默认库在 %LOCALAPPDATA%\\EzRead\\data，源码版默认在程序目录的 data；设置中的“选择目录并迁移”可更改位置，EZREAD_DATA_DIR 可显式覆盖。library.json 可用于其他软件读取。')
                     snapshot.unlink(missing_ok=True)
                     try:
                         self.send_file(export, 'EzRead-backup.zip')

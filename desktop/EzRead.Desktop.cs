@@ -17,14 +17,14 @@ using Microsoft.Web.WebView2.WinForms;
 
 internal sealed class ShellOptions
 {
-    public string Root, Data, Url, SmokeReport, VerificationSession, AppId, Identity, StartupReport;
+    public string Root, Data, Url, SmokeReport, VerificationSession, AppId, Identity, StartupReport, MigrationTestTarget;
     public bool Child;
     public Uri Origin;
     public static ShellOptions Parse(string[] args)
     {
         var values = new Dictionary<string, string>();
         for (int i = 0; i < args.Length; i += 2) {
-            if (i + 1 >= args.Length || (args[i] != "--app-root" && args[i] != "--data-dir" && args[i] != "--url" && args[i] != "--smoke-test" && args[i] != "--verification-session" && args[i] != "--startup-report"))
+            if (i + 1 >= args.Length || (args[i] != "--app-root" && args[i] != "--data-dir" && args[i] != "--url" && args[i] != "--smoke-test" && args[i] != "--verification-session" && args[i] != "--startup-report" && args[i] != "--migration-test-target"))
                 throw new ArgumentException("Invalid desktop startup arguments.");
             values.Add(args[i], args[i + 1]);
         }
@@ -41,6 +41,14 @@ internal sealed class ShellOptions
             Guid session;
             if (!Guid.TryParse(values["--verification-session"], out session)) throw new ArgumentException("Invalid verification session.");
             result.VerificationSession = session.ToString("N");
+        }
+        if (values.ContainsKey("--migration-test-target")) {
+            string target = values["--migration-test-target"], pathRoot = Path.GetPathRoot(target);
+            if (result.VerificationSession == null || result.SmokeReport != null || result.Child ||
+                !Path.IsPathRooted(target) || String.IsNullOrEmpty(pathRoot) ||
+                !(pathRoot.StartsWith("\\\\", StringComparison.Ordinal) || pathRoot.Length == 3 && pathRoot[1] == ':'))
+                throw new ArgumentException("Migration test requires a verification session, an absolute target and a normal main window.");
+            result.MigrationTestTarget = Path.GetFullPath(target);
         }
         return result;
     }
@@ -176,6 +184,112 @@ internal static class NativeProcessLifetime
     }
 }
 
+internal sealed class LibraryMigration : IDisposable
+{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] private struct StartupInfo {
+        public int Size; public string Reserved, Desktop, Title;
+        public uint X, Y, XSize, YSize, XCount, YCount, Fill, Flags;
+        public short Show, ReservedSize; public IntPtr ReservedData, Input, Output, Error;
+    }
+    [StructLayout(LayoutKind.Sequential)] private struct ProcessInfo {
+        public IntPtr Process, Thread; public uint Pid, Tid;
+    }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcess(string application, StringBuilder command, IntPtr processAttributes,
+        IntPtr threadAttributes, bool inheritHandles, uint flags, IntPtr environment, string directory,
+        ref StartupInfo startup, out ProcessInfo information);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool TerminateProcess(IntPtr process, uint code);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForSingleObject(IntPtr process, uint timeout);
+    [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+    private IntPtr process;
+    private uint pid;
+    private readonly string control;
+    private readonly JavaScriptSerializer json = new JavaScriptSerializer();
+    private LibraryMigration(string directory) { control = directory; }
+    private static string Quote(string value) {
+        var output = new StringBuilder("\""); int slashes = 0;
+        foreach (char ch in value) {
+            if (ch == '\\') { slashes++; continue; }
+            output.Append('\\', ch == '"' ? slashes * 2 + 1 : slashes);
+            output.Append(ch); slashes = 0;
+        }
+        output.Append('\\', slashes * 2); return output.Append('"').ToString();
+    }
+    public static LibraryMigration Start(ShellOptions options, string target, uint browserPid) {
+        string python = Path.Combine(options.Root, "runtime", "pythonw.exe");
+        if (!File.Exists(python)) python = Path.Combine(options.Root, ".venv", "Scripts", "pythonw.exe");
+        string entry = Path.Combine(options.Root, "scripts", "migrate-library.py");
+        if (!File.Exists(python) || !File.Exists(entry)) throw new FileNotFoundException("未找到文献库迁移程序或本机 Python 运行时。");
+        if (browserPid == 0) throw new InvalidOperationException("阅读窗口尚未就绪，请稍后再迁移。");
+        string control = Path.Combine(Path.GetTempPath(), "EzRead.Migration", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(control);
+        var migration = new LibraryMigration(control);
+        var values = new List<string> { python, "-B", entry, "--root", options.Root, "--source", options.Data,
+            "--target", target, "--owner-pid", Process.GetCurrentProcess().Id.ToString(), "--browser-pid", browserPid.ToString(),
+            "--url", options.Origin.GetLeftPart(UriPartial.Authority), "--control-dir", control };
+        if (options.VerificationSession != null) { values.Add("--verification-session"); values.Add(options.VerificationSession); }
+        var command = new StringBuilder();
+        foreach (string value in values) { if (command.Length != 0) command.Append(' '); command.Append(Quote(value)); }
+        var startup = new StartupInfo(); startup.Size = Marshal.SizeOf(typeof(StartupInfo));
+        ProcessInfo information;
+        // Breakaway must be explicit: ordinary Process.Start inherits our kill-on-close Job.
+        if (!CreateProcess(python, command, IntPtr.Zero, IntPtr.Zero, false, 0x01000000 | 0x08000000,
+                IntPtr.Zero, options.Root, ref startup, out information))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "无法启动独立迁移程序；原文献库未切换。");
+        migration.process = information.Process; migration.pid = information.Pid;
+        CloseHandle(information.Thread);
+        return migration;
+    }
+    public async Task WaitReady() {
+        var timer = Stopwatch.StartNew();
+        while (timer.ElapsedMilliseconds < 10000) {
+            if (WaitForSingleObject(process, 0) != 0x102) throw new InvalidOperationException(FailureMessage("迁移程序未就绪，请检查迁移目录或稍后重试。"));
+            string path = Path.Combine(control, "ready.json");
+            if (File.Exists(path)) {
+                var value = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+                if (!value.ContainsKey("ready") || !Object.Equals(value["ready"], true) || !value.ContainsKey("pid") || Convert.ToUInt32(value["pid"]) != pid)
+                    throw new InvalidOperationException("迁移程序就绪身份不匹配。");
+                return;
+            }
+            await Task.Delay(100);
+        }
+        throw new TimeoutException(FailureMessage("迁移准备超时，原窗口继续保留。请稍后重试。"));
+    }
+    private string FailureMessage(string fallback) {
+        try {
+            string path = Path.Combine(control, "report.json");
+            if (!File.Exists(path) || new FileInfo(path).Length > 65536) return fallback;
+            var report = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+            object error;
+            if (report.TryGetValue("error", out error) && error is string && !String.IsNullOrWhiteSpace((string)error)) {
+                string message = (string)error;
+                return message.Length > 400 ? message.Substring(0, 400) + "…" : message;
+            }
+        } catch (Exception) { }
+        return fallback;
+    }
+    public void Approve() {
+        if (WaitForSingleObject(process, 0) != 0x102) throw new InvalidOperationException("迁移程序已退出，未切换文献库。");
+        string final = Path.Combine(control, "approved.json"), temporary = final + ".tmp";
+        byte[] bytes = Encoding.UTF8.GetBytes(json.Serialize(new { approved = true, owner_pid = Process.GetCurrentProcess().Id }));
+        using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+            stream.Write(bytes, 0, bytes.Length); stream.Flush(true);
+        }
+        File.Move(temporary, final);
+    }
+    public void Cancel() {
+        if (process == IntPtr.Zero) return;
+        uint state = WaitForSingleObject(process, 0);
+        if (state == 0x102 && !TerminateProcess(process, 1) && WaitForSingleObject(process, 0) != 0)
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        if (WaitForSingleObject(process, 5000) != 0) throw new TimeoutException("迁移准备程序未退出，请稍后重试。");
+    }
+    public void Dispose() {
+        // Approved migration must outlive this host. Closing a process handle does not terminate it.
+        if (process != IntPtr.Zero) { CloseHandle(process); process = IntPtr.Zero; }
+    }
+}
+
 internal static class NativeTaskbar
 {
     [ComImport, Guid("56FDF342-FD6D-11D0-958A-006097C9A090"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -302,6 +416,9 @@ internal sealed class ReaderWindow : Form
     private bool darkTheme;
     private int captionThemeResult, textThemeResult;
     private readonly OwnedBackend backend;
+    private LibraryMigration migration;
+    private bool migrationSelecting;
+    private bool migrationTestStarted;
     public int ExitCode;
     public ReaderWindow(ShellOptions value)
     {
@@ -428,6 +545,13 @@ internal sealed class ReaderWindow : Form
             object packet = json.DeserializeObject(message);
             if (packet as string == "ezread-fit-viewport") { RequestViewportFit(); return; }
             var wheel = packet as Dictionary<string, object>;
+            if (wheel != null && wheel.ContainsKey("type") && wheel["type"] as string == "ezread-migrate-library") {
+                if (!ClosingWindow && !options.Child && !migrationSelecting && migration == null) {
+                    migrationSelecting = true;
+                    BeginInvoke((Action)(async delegate { await ChooseLibraryMigration(); }));
+                }
+                return;
+            }
             if (wheel != null && wheel.ContainsKey("type") && wheel["type"] as string == "ezread-theme") {
                 if (!ClosingWindow && wheel.ContainsKey("dark") && wheel["dark"] is bool) ApplyWindowTheme((bool)wheel["dark"]);
                 return;
@@ -593,6 +717,11 @@ internal sealed class ReaderWindow : Form
                     WriteStartupReport(true);
                     await FitViewport();
                     if (options.SmokeReport != null) await SmokeTest(environment);
+                    if (options.MigrationTestTarget != null && !migrationTestStarted && !options.Child) {
+                        migrationTestStarted = true;
+                        migrationSelecting = true;
+                        BeginInvoke((Action)(async delegate { await RunLibraryMigrationTest(); }));
+                    }
                 } catch (Exception exc) {
                     ExitCode = 1; Log("navigation-initialization: " + exc.GetType().Name);
                     WriteStartupReport(false);
@@ -706,16 +835,81 @@ internal sealed class ReaderWindow : Form
         try { Log("taskbar-remove hwnd=" + Handle.ToInt64() + " hr=" + NativeTaskbar.SetVisible(Handle, false)); }
         catch (Exception exc) { Log("taskbar-remove: " + exc.GetType().Name); }
     }
+    private async Task CancelLibraryMigration() {
+        if (migration == null) return;
+        var pending = migration;
+        await Task.Run((Action)pending.Cancel);
+        pending.Dispose(); migration = null;
+        Log("library-migration-cancelled");
+    }
+    private void CheckLibraryMigration() {
+        if (ClosingWindow || !ready || options.Child) throw new InvalidOperationException("阅读窗口尚未就绪，请稍后再迁移。");
+        // Do not silently override either the current environment or its legacy compatibility key.
+        if (!String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("EZREAD_DATA_DIR")) ||
+            !String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TUDU_DATA_DIR")))
+            throw new InvalidOperationException("当前文献库位置由 EZREAD_DATA_DIR 或旧 TUDU_DATA_DIR 环境变量指定。请先移除相应覆盖并重新打开 EzRead，再使用目录迁移。");
+    }
+    private async Task StartLibraryMigration(string target) {
+        CheckLibraryMigration();
+        migration = LibraryMigration.Start(options, target, view.CoreWebView2.BrowserProcessId);
+        Log("library-migration-preparing");
+        await migration.WaitReady();
+        Log("library-migration-ready");
+        migrationSelecting = false;
+        Close();
+    }
+    private async Task RunLibraryMigrationTest() {
+        Exception failure = null;
+        try {
+            if (options.VerificationSession == null || options.SmokeReport != null || options.Child || options.MigrationTestTarget == null)
+                throw new InvalidOperationException("Migration test is restricted to an isolated verification session.");
+            await StartLibraryMigration(options.MigrationTestTarget);
+        } catch (Exception exc) { failure = exc; }
+        finally { migrationSelecting = false; }
+        if (failure != null) {
+            try { await CancelLibraryMigration(); }
+            catch (Exception cancellation) { Log("library-migration-cancel: " + cancellation.GetType().Name); }
+            Log("library-migration-test-failed: " + failure.Message);
+            ExitCode = 1;
+            Close();
+        }
+    }
+    private async Task ChooseLibraryMigration() {
+        Exception failure = null;
+        try {
+            CheckLibraryMigration();
+            string target;
+            using (var folder = new FolderBrowserDialog()) {
+                folder.Description = "选择用于迁移文献库的空目录";
+                folder.ShowNewFolderButton = true;
+                if (folder.ShowDialog(this) != DialogResult.OK) return;
+                target = Path.GetFullPath(folder.SelectedPath);
+            }
+            string message = "将文献库从：\n" + options.Data + "\n\n复制到：\n" + target +
+                "\n\n目标目录必须为空。迁移期间程序将关闭，完成后自动重新打开。原文献库保留，不会删除。\n\n是否开始迁移？";
+            if (MessageBox.Show(this, message, "迁移文献库", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                                MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            await StartLibraryMigration(target);
+        } catch (Exception exc) { failure = exc; }
+        finally { migrationSelecting = false; }
+        if (failure != null) {
+            try { await CancelLibraryMigration(); }
+            catch (Exception cancellation) { Log("library-migration-cancel: " + cancellation.GetType().Name); }
+            Log("library-migration: " + failure.GetType().Name);
+            ShowWarning("未能开始迁移，原窗口和文献库继续保留。\n" + failure.Message, MessageBoxIcon.Warning);
+        }
+    }
     private async void OnClosing(object sender, FormClosingEventArgs e)
     {
         if (mayClose) return;
+        if (migrationSelecting) { e.Cancel = true; return; }
         // The main window has already saved before closing its PDF children.
         var owner = Owner as ReaderWindow;
         if (options.Child && e.CloseReason == CloseReason.FormOwnerClosing && owner != null && owner.mayClose) { mayClose = true; return; }
         e.Cancel = true;
         if (preparingClose) return;
         preparingClose = true;
-        bool localDraftsSaved = false;
+        bool localDraftsSaved = false, closeConfirmed = false;
         Log("close-request");
         var visibleWindows = new List<Form>();
         if (Visible) visibleWindows.Add(this);
@@ -753,19 +947,26 @@ internal sealed class ReaderWindow : Form
                             throw new TimeoutException("save-confirmation");
                         }
                         Log("close-save-unconfirmed result=" + answer);
+                        await CancelLibraryMigration();
                         RestoreClosingWindows(visibleWindows);
                         ShowWarning("仍有内容未能保存，窗口暂未关闭。请确认草稿已保存后重试。", MessageBoxIcon.Warning);
                         return;
                     }
                     Log("close-save-confirmed");
+                    closeConfirmed = true;
                     ClearCloseDrafts();
                 }
+                if (migration != null && !closeConfirmed) throw new InvalidOperationException("未确认当前内容已保存，迁移已取消。");
+                if (migration != null) { migration.Approve(); Log("library-migration-approved"); }
                 if (backend != null) await Task.Run((Action)backend.Stop);
                 mayClose = true; Close();
             } catch (Exception exc) { closeError = exc; }
             if (closeError == null) return;
             Log("close-save: " + closeError.GetType().Name);
-            if (webviewFailed && localDraftsSaved) {
+            bool migrating = migration != null;
+            try { await CancelLibraryMigration(); }
+            catch (Exception cancellation) { Log("library-migration-cancel: " + cancellation.GetType().Name); }
+            if (webviewFailed && localDraftsSaved && !migrating) {
                 Log("close-with-local-drafts-after-webview-failure");
                 if (backend != null) { try { await Task.Run((Action)backend.Stop); } catch (Exception stop) { Log("backend-close: " + stop.GetType().Name); } }
                 mayClose = true; Close();
@@ -994,7 +1195,7 @@ internal sealed class ReaderWindow : Form
     }
     private void Log(string message) { try { Directory.CreateDirectory(options.Data); File.AppendAllText(Path.Combine(options.Data, "desktop.log"), DateTime.Now.ToString("s") + " pid=" + Process.GetCurrentProcess().Id + " child=" + options.Child + " " + message + Environment.NewLine, Encoding.UTF8); } catch { } }
     protected override void Dispose(bool disposing) {
-        if (disposing) { viewportTimer.Dispose(); view.Dispose(); if (Icon != null) Icon.Dispose(); if (captionIcon != null) captionIcon.Dispose(); }
+        if (disposing) { if (migration != null) migration.Dispose(); viewportTimer.Dispose(); view.Dispose(); if (Icon != null) Icon.Dispose(); if (captionIcon != null) captionIcon.Dispose(); }
         base.Dispose(disposing);
     }
 }

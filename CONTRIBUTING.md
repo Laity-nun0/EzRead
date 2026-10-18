@@ -66,7 +66,7 @@ $env:EZREAD_DATA_DIR = Join-Path (Get-Location) 'work\dev-data'
 - PR 描述说明问题、最终行为、验证和实际限制。截图使用合成文献或已获授权的样本。
 - 检查 `git status` 和拟提交差异，排除文献、账号资料、本机绝对路径、缓存和备份。
 
-GitHub Actions 在 Windows、Python 3.10 与 3.12 上使用相同检查入口，并构建桌面组件。项目源码与文档采用根目录 [MIT License](LICENSE)；贡献按该许可证提供，保留第三方资源原有授权。当前发布形式为源码，桌面组件按构建说明生成。
+GitHub Actions 在 Windows、Python 3.10 与 3.12 上使用相同检查入口，并构建桌面组件。本仓库是[独立维护的二次开发版本](docs/DERIVATION.md)，同时发布源码和 [Windows 安装包](docs/INSTALLER.md)。项目源码与文档采用根目录 [MIT License](LICENSE)；贡献按该许可证提供，保留原项目版权声明和第三方资源原有授权。
 
 ## 主动重置个人文献库
 

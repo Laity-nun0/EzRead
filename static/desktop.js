@@ -75,3 +75,9 @@ async function ezreadPrepareDesktopClose() {
   // Failed requests retain their local copies through the existing save code.
   return true;
 }
+
+async function ezreadMigrateLibrary() {
+  if (!window.ezreadDesktop || !window.chrome?.webview) throw new Error("请选择桌面版 EzRead 中的“选择目录并迁移”。");
+  if (!await ezreadPrepareDesktopClose()) throw new Error("仍有内容未能保存，请保存后再迁移文献库。");
+  window.chrome.webview.postMessage({ type: "ezread-migrate-library" });
+}

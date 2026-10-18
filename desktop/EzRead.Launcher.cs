@@ -54,7 +54,10 @@ internal static class Launcher
             start.UseShellExecute = false;
             start.CreateNoWindow = true;
             start.WindowStyle = ProcessWindowStyle.Hidden;
-            start.EnvironmentVariables["EZREAD_DATA_DIR"] = data;
+            if (session == null)
+                start.EnvironmentVariables["EZREAD_DEFAULT_DATA_DIR"] = data;
+            else
+                start.EnvironmentVariables["EZREAD_DATA_DIR"] = data;
             start.EnvironmentVariables.Remove("PYTHONHOME");
             start.EnvironmentVariables.Remove("PYTHONPATH");
             using (Process child = Process.Start(start))

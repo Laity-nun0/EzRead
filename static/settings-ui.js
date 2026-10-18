@@ -19,7 +19,7 @@ async function openSettings(initialPanel = "appearance") {
         el("div", { class: "status-panel", id: "settings-api-status" }, apiStatusPanel()),
         el("div", { class: "usage-panel", id: "settings-usage" }, usagePanel(false))))],
     ["chat", "问答", apiTranslationSettingsPanel("chat")],
-    ["data", "文献与备份", el("div", {}, el("h3", {}, "本地文献库"), el("p", { class: "settings-path" }, state.status?.data_dir || "本机文献库"), el("div", { class: "settings-data-actions" }, el("a", { href: "/api/export", class: "button secondary", download: "EzRead-library-backup.zip" }, icon("download"), "导出完整备份"), button("查看回收站", event => act(showTrash, event.currentTarget), "secondary", "trash")), el("div", { id: "trash-list" }))],
+    ["data", "文献与备份", el("div", {}, el("h3", {}, "本地文献库"), el("p", { class: "settings-path" }, state.status?.data_dir || "本机文献库"), el("div", { class: "settings-data-actions" }, button("选择目录并迁移", event => act(ezreadMigrateLibrary, event.currentTarget), "secondary"), el("a", { href: "/api/export", class: "button secondary", download: "EzRead-library-backup.zip" }, icon("download"), "导出完整备份"), button("查看回收站", event => act(showTrash, event.currentTarget), "secondary", "trash")), el("p", { class: "small muted" }, "在桌面版中选择空目录。迁移完成后自动重新打开，原文献库保留。"), el("div", { id: "trash-list" }))],
     ["about", "关于", el("div", { class: "about-ezread" }, el("img", { src: "/static/ezread-icon.png", width: "84", height: "84", alt: "EzRead" }), el("h3", {}, "EzRead"), el("p", { class: "small muted" }, state.status?.version ? `版本 ${state.status.version} · 本地论文阅读器` : "本地论文阅读器"))]
   ];
   const nav = el("div", { class: "settings-tabs", role: "tablist", "aria-label": "设置分类" });

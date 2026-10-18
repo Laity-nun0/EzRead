@@ -60,7 +60,7 @@ def source_allowed(name):
             or name.startswith(('skills/ezread-paper-import/', 'assets/dictionaries/',
                                 'assets/third-party/'))
             or name in {'docs/AI_API.md', 'docs/ARCHITECTURE.md', 'docs/PDF_LAYOUT.md',
-                        'docs/INSTALLER.md'})
+                        'docs/INSTALLER.md', 'docs/DERIVATION.md', 'scripts/migrate-library.py'})
 
 
 def tracked_sources(root):

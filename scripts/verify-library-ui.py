@@ -2,6 +2,7 @@
 import argparse
 from contextlib import ExitStack
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -17,19 +18,48 @@ import server
 import codex_models
 import paper_ai
 import pypdfium2 as pdfium
-from PIL import Image
+from PIL import Image, ImageDraw
 from ezread import ai_api, translation_api
 
 LATEST_ID = '0000000000000007'
 
 
+def synthetic_cover(index):
+    """完全程序生成的几何示意图，不读取论文或历史截图。"""
+    palette = ['#6188a2', '#a58062', '#6c9583', '#8c81a3', '#a89458']
+    color = palette[index % len(palette)]
+    image = Image.new('RGB', (540, 320), '#f5f4ef')
+    draw = ImageDraw.Draw(image)
+    if index % 3 == 0:
+        for row in range(5):
+            for column in range(9):
+                x, y = 46 + column * 55, 42 + row * 55
+                radius = 12 + (row * 7 + column * 3 + index) % 10
+                draw.ellipse((x-radius, y-radius, x+radius, y+radius), fill=color, outline='#ffffff', width=3)
+        draw.line([(35, 260), (140, 195), (245, 225), (335, 115), (480, 52)], fill='#353d47', width=5)
+    elif index % 3 == 1:
+        draw.line((55, 260, 490, 260), fill='#82909a', width=2)
+        draw.line((55, 260, 55, 35), fill='#82909a', width=2)
+        for curve in range(3):
+            points = [(55+x, 255-int((165+curve*14)*(1-math.exp(-x/(80+curve*50)))))
+                      for x in range(425)]
+            draw.line(points, fill=[color, '#b8afa2', '#8ba4a0'][curve], width=5)
+        for y in range(80, 250, 50):
+            draw.line((60, y, 490, y), fill='#dedfd8', width=1)
+    else:
+        for row in range(7):
+            for column in range(12):
+                value = (row * row + column * 3 + index * 7) % 13
+                fill = (80+value*10, 118+value*7, 143+value*5)
+                x, y = 40+column*39, 31+row*37
+                draw.rounded_rectangle((x, y, x+35, y+32), radius=3, fill=fill)
+    draw.text((18, 301), 'SYNTHETIC DEMO / GEOMETRY ONLY', fill='#656f76')
+    return image
+
+
 def seed_library(data):
     server.DATA, server.LIBRARY = data, data / 'library'
     server.init_db()
-    # 复用已公开的项目展示图，只裁切其中的科学图片作为测试封面。
-    source = Image.open(ROOT / 'docs/images/library.png')
-    boxes = [(300, 235, 490, 408), (750, 240, 945, 390), (1205, 310, 1400, 430),
-             (1655, 310, 1848, 450), (2110, 280, 2300, 470)]
     sources = [('ACS Nano', 'journal'), ('ACTA MECHANICA SINICA', 'journal'),
                ('Synthetic Research Journal', 'journal'), ('Synthetic Robotics Conference', 'conference'),
                ('arXiv', 'preprint')]
@@ -37,7 +67,7 @@ def seed_library(data):
         pid = f'{index:016x}'
         folder = server.LIBRARY / pid
         folder.mkdir(parents=True)
-        image = source.crop(boxes[index % len(boxes)])
+        image = synthetic_cover(index)
         image.save(folder / 'cover.png')
         with pdfium.PdfDocument.new() as document:
             for _ in range(8):

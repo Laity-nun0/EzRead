@@ -43,5 +43,14 @@ async function run() {
   context.preferenceSaveBusy = false;
   context.pendingPreferences = { theme: "sage" };
   assert.equal(context.ezreadDesktopDraftSnapshot(), null);
+  context.window = {};
+  await assert.rejects(context.ezreadMigrateLibrary(), /桌面版/);
+  const messages = [];
+  context.window = { ezreadDesktop: true, chrome: { webview: { postMessage: message => messages.push(message) } } };
+  await assert.rejects(context.ezreadMigrateLibrary(), /未能保存/);
+  assert.equal(messages.length, 0, '保存失败不能发出迁移请求');
+  context.pendingPreferences = {};
+  await context.ezreadMigrateLibrary();
+  assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ type: 'ezread-migrate-library' }], '网页不传递任意目录路径');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

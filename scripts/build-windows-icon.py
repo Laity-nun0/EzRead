@@ -11,7 +11,7 @@ import struct
 from PIL import Image
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "static"
 SOURCE = STATIC / "ezread-icon.png"
 DESTINATION = STATIC / "ezread.ico"

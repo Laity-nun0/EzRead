@@ -6,9 +6,8 @@
 
 文件：
 
-- 源图：`assets/branding/ezread-book.png`。
-- 应用 PNG：`static/ezread-icon.png`。
-- Windows 多尺寸 ICO：`static/ezread.ico`。16、24、32、48、64、128、256 像素版本均由应用使用的高清原图 `static/ezread-icon.png` 直接缩放编码，保留透明背景。运行 `python assets/branding/build_windows_icon.py` 可重建；运行 `powershell -File scripts/build-desktop.ps1 -OutputDirectory work/desktop-build` 可生成独立 EXE 验证图标，不覆盖正在使用的桌面组件。
+- 唯一源图与应用 PNG：`static/ezread-icon.png`。原 `assets/branding/ezread-book.png` 与它逐字节相同，已去除重复副本。
+- Windows 多尺寸 ICO：`static/ezread.ico`。16、24、32、48、64、128、256 像素版本均由应用使用的高清原图 `static/ezread-icon.png` 直接缩放编码，保留透明背景。运行 `python scripts/build-windows-icon.py` 可重建；运行 `powershell -File scripts/build-desktop.ps1 -OutputDirectory work/desktop-build` 可生成独立 EXE 验证图标，不覆盖正在使用的桌面组件。
 - 标题栏辅助 ICO：`static/window-icon-transparent.ico`，仅供原生小图标隐藏；网页 favicon 与任务栏仍使用真实书本图标。
 
 `setup-desktop.ps1` 为桌面快捷方式在 `work/shortcut-icons/` 保存按图标内容摘要命名的同内容 ICO，避免 Windows 沿用旧图标缓存；该目录是本机生成文件，不提交。

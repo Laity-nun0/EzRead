@@ -218,7 +218,7 @@ now = _utils.now
 Handler = _web.handler_for(_context)
 
 
-def main():
+def _serve():
     global PORT
     _processes.attach_job()
     parser = argparse.ArgumentParser()
@@ -260,6 +260,15 @@ def main():
         worker_thread.join(timeout=5)
         structure_thread.join(timeout=2)
         httpd.server_close()
+
+
+def main():
+    from ezread.data_location import data_use_lock
+    # 不同源码副本或不同端口也不能同时写同一文献库；迁移同样持有此租约。
+    with data_use_lock(DATA):
+        if _data_directory(ROOT) != DATA:
+            raise RuntimeError('文献目录已改变，请重新启动 EzRead，未打开旧库。')
+        _serve()
 
 
 if __name__ == '__main__':

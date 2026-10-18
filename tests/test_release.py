@@ -27,7 +27,8 @@ class ReleaseTests(unittest.TestCase):
             self.assertFalse(release.source_allowed(name), name)
         for name in ('server.py', 'launch.pyw', 'static/vendor/pdfjs/pdf.mjs',
                      'assets/dictionaries/ecdict.sqlite3', 'ezread/storage.py',
-                     'THIRD-PARTY-NOTICES.md', 'docs/INSTALLER.md'):
+                     'THIRD-PARTY-NOTICES.md', 'docs/INSTALLER.md', 'docs/DERIVATION.md',
+                     'scripts/migrate-library.py'):
             self.assertTrue(release.source_allowed(name), name)
 
     def test_distribution_record_contract(self):
