@@ -103,7 +103,7 @@ def main():
         arguments = ['--prepare-assets']
     manifest = run_json(executable, [str(ROOT / 'pdf_layout_engine.py'), *arguments], env)
     engine._write(base / 'runtime-manifest.json', manifest)
-    print(json.dumps(engine.availability(ROOT), ensure_ascii=False), flush=True)
+    print(json.dumps(engine.availability(ROOT)), flush=True)
 
 
 if __name__ == '__main__':
