@@ -54,6 +54,15 @@ const edge = process.env.EZREAD_BROWSER || path.join(process.env['PROGRAMFILES(X
       if (viewport.width === 960) assert.equal(layout.columns, 2, '窄窗口保留两列完整卡片');
       assert.equal(layout.horizontalOverflow, false, '文献库不能产生页面横向滚动');
       assert.equal(layout.outerScroll, true, '浏览器长列表保留正常纵向滚动；原生外层滚动由宿主另验收');
+      const arrows = await page.locator('.library-filter-actions .filter-trigger[data-select]').evaluateAll(buttons => buttons.map(button => {
+        const arrow = button.querySelector('.filter-chevron'), box = arrow.getBoundingClientRect(), style = getComputedStyle(button);
+        return { display: style.display, width: box.width, height: box.height, transform: getComputedStyle(arrow).transform };
+      }));
+      assert.equal(arrows.length, 2);
+      for (const arrow of arrows) {
+        assert.ok(['inline-flex', 'flex'].includes(arrow.display), '筛选箭头必须处于 flex 布局，不能退化成竖线');
+        assert.ok(arrow.width > 5 && arrow.height > 5 && arrow.transform !== 'none', '下拉箭头具备实际尺寸和旋转');
+      }
       for (const item of layout.cards) {
         assert.ok(item.cover.bottom <= item.body.top + 1, '卡片封面位于正文上方');
         assert.equal(item.titleOverflow, false, '英文标题完整显示');

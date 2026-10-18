@@ -280,6 +280,9 @@ internal sealed class ReaderWindow : Form
     [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr window, int index);
     [DllImport("user32.dll")] private static extern bool AdjustWindowRectExForDpi(ref NativeRect rect, uint style, bool menu, uint extendedStyle, uint dpi);
     [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);
+    [DllImport("user32.dll")] private static extern bool PrintWindow(IntPtr window, IntPtr device, uint flags);
     private readonly ShellOptions options;
     private WebView2 view = new WebView2();
     private readonly Panel viewport = new Panel { Dock = DockStyle.Fill };
@@ -296,6 +299,8 @@ internal sealed class ReaderWindow : Form
     private int viewportOffsetBeforeModal;
     private bool fittingViewport;
     private bool ready, preparingClose, mayClose, webviewFailed, startupReported;
+    private bool darkTheme;
+    private int captionThemeResult, textThemeResult;
     private readonly OwnedBackend backend;
     public int ExitCode;
     public ReaderWindow(ShellOptions value)
@@ -344,6 +349,22 @@ internal sealed class ReaderWindow : Form
         if (!options.Child) NativeOpenRequest.Register(Handle, options.Identity);
         if (captionIcon != null) SendMessage(Handle, 0x80, IntPtr.Zero, captionIcon.Handle);
         if (Icon != null) SendMessage(Handle, 0x80, new IntPtr(1), Icon.Handle);
+        ApplyWindowTheme(darkTheme);
+    }
+    private void ApplyWindowTheme(bool dark) {
+        darkTheme = dark;
+        BackColor = dark ? Color.FromArgb(24, 28, 34) : Color.FromArgb(251, 252, 254);
+        view.DefaultBackgroundColor = BackColor;
+        if (!IsHandleCreated) return;
+        // DWM 只作用于本应用窗口；旧版 Windows 不支持时保留系统标题栏。
+        int immersive = dark ? 1 : 0;
+        int result = DwmSetWindowAttribute(Handle, 20, ref immersive, sizeof(int));
+        int caption = ColorTranslator.ToWin32(dark ? Color.FromArgb(24, 28, 34) : Color.FromArgb(241, 243, 246));
+        int text = ColorTranslator.ToWin32(dark ? Color.FromArgb(237, 241, 247) : Color.FromArgb(32, 39, 49));
+        captionThemeResult = DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int));
+        textThemeResult = DwmSetWindowAttribute(Handle, 36, ref text, sizeof(int));
+        if (result != 0) Log("window-theme-unavailable: " + result);
+        foreach (Form owned in OwnedForms) { var child = owned as ReaderWindow; if (child != null) child.ApplyWindowTheme(dark); }
     }
     protected override void OnHandleDestroyed(EventArgs e) {
         if (!options.Child) NativeOpenRequest.Unregister(Handle, options.Identity);
@@ -407,6 +428,10 @@ internal sealed class ReaderWindow : Form
             object packet = json.DeserializeObject(message);
             if (packet as string == "ezread-fit-viewport") { RequestViewportFit(); return; }
             var wheel = packet as Dictionary<string, object>;
+            if (wheel != null && wheel.ContainsKey("type") && wheel["type"] as string == "ezread-theme") {
+                if (!ClosingWindow && wheel.ContainsKey("dark") && wheel["dark"] is bool) ApplyWindowTheme((bool)wheel["dark"]);
+                return;
+            }
             if (wheel == null || !wheel.ContainsKey("type") || wheel["type"] as string != "ezread-sidebar-wheel" || !wheel.ContainsKey("deltaY") || !wheel.ContainsKey("pixelRatio")) return;
             double delta = Convert.ToDouble(wheel["deltaY"]), ratio = Convert.ToDouble(wheel["pixelRatio"]);
             if (double.IsNaN(delta) || double.IsInfinity(delta) || Math.Abs(delta) > 20000 || double.IsNaN(ratio) || double.IsInfinity(ratio) || ratio <= 0 || ratio > 16) return;
@@ -517,7 +542,7 @@ internal sealed class ReaderWindow : Form
                     Uri source; if (!Uri.TryCreate(e.Source, UriKind.Absolute, out source) || (source.AbsolutePath != "/" && source.AbsolutePath != "/static/index.html")) return;
                     ReceiveViewportMessage(e.WebMessageAsJson);
                 };
-                await core.AddScriptToExecuteOnDocumentCreatedAsync("(()=>{if(window.top!==window)return;const fit=()=>window.chrome?.webview?.postMessage('ezread-fit-viewport');window.addEventListener('resize',fit);document.addEventListener('DOMContentLoaded',()=>{let font=getComputedStyle(document.documentElement).fontSize;new MutationObserver(()=>{const next=getComputedStyle(document.documentElement).fontSize;if(next!==font){font=next;fit();}}).observe(document.documentElement,{attributes:true,attributeFilter:['style']});new MutationObserver(changes=>{if(changes.some(change=>change.target.tagName==='DIALOG'))fit();}).observe(document.body,{subtree:true,attributes:true,attributeFilter:['open']});fit();},{once:true});})();");
+                await core.AddScriptToExecuteOnDocumentCreatedAsync("(()=>{if(window.top!==window)return;const fit=()=>window.chrome?.webview?.postMessage('ezread-fit-viewport');const theme=()=>window.chrome?.webview?.postMessage({type:'ezread-theme',dark:document.documentElement.dataset.theme==='graphite'});window.addEventListener('resize',fit);document.addEventListener('DOMContentLoaded',()=>{let font=getComputedStyle(document.documentElement).fontSize;new MutationObserver(changes=>{const next=getComputedStyle(document.documentElement).fontSize;if(next!==font){font=next;fit();}if(changes.some(change=>change.attributeName==='data-theme'))theme();}).observe(document.documentElement,{attributes:true,attributeFilter:['style','data-theme']});theme();new MutationObserver(changes=>{if(changes.some(change=>change.target.tagName==='DIALOG'))fit();}).observe(document.body,{subtree:true,attributes:true,attributeFilter:['open']});fit();},{once:true});})();");
                 view.ZoomFactorChanged += delegate { RequestViewportFit(); };
             }
             core.NavigationStarting += delegate(object sender, CoreWebView2NavigationStartingEventArgs e) {
@@ -531,6 +556,7 @@ internal sealed class ReaderWindow : Form
                 if (!options.IsLocal(e.Uri)) { OpenExternal(e.Uri); return; }
                 var childOptions = new ShellOptions { Root = options.Root, Data = options.Data, Origin = options.Origin, Url = e.Uri, Child = true, VerificationSession = options.VerificationSession, AppId = options.AppId, Identity = options.Identity };
                 var child = new ReaderWindow(childOptions);
+                child.ApplyWindowTheme(darkTheme);
                 child.Show(this);
             };
             core.DownloadStarting += delegate(object sender, CoreWebView2DownloadStartingEventArgs e) {
@@ -845,8 +871,36 @@ internal sealed class ReaderWindow : Form
             scrollY = viewportOffset, maximumOffset = Math.Max(0, view.Height - physicalClient.Height), viewTop = view.Top,
             zoomFactor = view.ZoomFactor, cardBox = json.DeserializeObject(json.Deserialize<string>(cardBox)), layout = json.DeserializeObject(json.Deserialize<string>(layout)) };
     }
+    private async Task<object> SmokeTheme(string theme) {
+        bool expectedDark = theme == "graphite";
+        await view.CoreWebView2.ExecuteScriptAsync("state.settings.theme=" + json.Serialize(theme) + ";applyPreferences();");
+        for (int attempt = 0; attempt < 40 && darkTheme != expectedDark; attempt++) await Task.Delay(25);
+        await Task.Delay(100);
+        int dark;
+        int darkResult = DwmGetWindowAttribute(Handle, 20, out dark, sizeof(int));
+        bool captured;
+        // 仅在 smoke 验收中捕获本窗口标题栏，不读取其他应用画面。
+        using (var bitmap = new Bitmap(Width, Height)) {
+            using (var graphics = Graphics.FromImage(bitmap)) {
+                IntPtr device = graphics.GetHdc();
+                try { captured = PrintWindow(Handle, device, 2); }
+                finally { graphics.ReleaseHdc(device); }
+            }
+            if (captured) {
+                int height = Math.Max(1, Math.Min(Height, viewport.PointToScreen(Point.Empty).Y - Top));
+                using (var bar = bitmap.Clone(new Rectangle(0, 0, Width, height), bitmap.PixelFormat))
+                    bar.Save(options.SmokeReport + ".titlebar-" + theme + ".png", System.Drawing.Imaging.ImageFormat.Png);
+            }
+        }
+        return new { theme = theme, applied = darkTheme, dark = dark, darkResult = darkResult,
+            captionResult = captionThemeResult, textResult = textThemeResult, captured = captured };
+    }
     private async Task SmokeTest(CoreWebView2Environment environment) {
         await Task.Delay(1600);
+        var themes = new List<object>();
+        themes.Add(await SmokeTheme("paper"));
+        themes.Add(await SmokeTheme("graphite"));
+        themes.Add(await SmokeTheme("paper"));
         // Fixture covers must finish loading before comparing geometry. Lazy
         // loading must not turn a cross-monitor test into a loading-time test.
         await view.CoreWebView2.ExecuteScriptAsync("window.__smokeCoversReady=false;(async()=>{const covers=[...document.querySelectorAll('.card-cover img')];covers.forEach(n=>n.loading='eager');await Promise.allSettled(covers.map(n=>n.decode()));window.__smokeCoversReady=true;})();");
@@ -934,7 +988,7 @@ internal sealed class ReaderWindow : Form
                 for (int y = 0; iconMatches && y < actual.Height; y++) for (int x = 0; x < actual.Width; x++) if (actual.GetPixel(x, y) != expected.GetPixel(x, y)) { iconMatches = false; break; }
             }
         } finally { if (expectedHandle != IntPtr.Zero) DestroyIcon(expectedHandle); }
-        var report = new { processId = Process.GetCurrentProcess().Id, browserProcessId = view.CoreWebView2.BrowserProcessId, webViewVersion = environment.BrowserVersionString, hostExecutable = Application.ExecutablePath, windowTitle = Text, bigIconPresent = big != IntPtr.Zero, bigIconOwned = big == Icon.Handle, bigIconMatchesBook = iconMatches, captionIconOwned = SendMessage(Handle, 0x7f, IntPtr.Zero, IntPtr.Zero) == captionIcon.Handle, page = json.DeserializeObject(json.Deserialize<string>(state)), layouts = layouts, viewportChecks = viewportChecks, dpiChecks = dpiChecks, wheelChecks = wheelChecks, settingsBackground = settingsBackground };
+        var report = new { processId = Process.GetCurrentProcess().Id, browserProcessId = view.CoreWebView2.BrowserProcessId, webViewVersion = environment.BrowserVersionString, hostExecutable = Application.ExecutablePath, windowTitle = Text, bigIconPresent = big != IntPtr.Zero, bigIconOwned = big == Icon.Handle, bigIconMatchesBook = iconMatches, captionIconOwned = SendMessage(Handle, 0x7f, IntPtr.Zero, IntPtr.Zero) == captionIcon.Handle, page = json.DeserializeObject(json.Deserialize<string>(state)), layouts = layouts, viewportChecks = viewportChecks, dpiChecks = dpiChecks, wheelChecks = wheelChecks, settingsBackground = settingsBackground, themes = themes };
         File.WriteAllText(options.SmokeReport, json.Serialize(report), Encoding.UTF8);
         Close();
     }

@@ -101,7 +101,8 @@
 .library-type-tabs button { min-height: 2.2rem; padding: 0.4rem 0.85rem; border-radius: 0.5rem; background: var(--surface-subtle); color: var(--text); font-size: 0.8125rem; }
 .library-type-tabs button.active { background: var(--green); color: var(--on-accent); }
 .library-filter-actions { display: flex; gap: 0.35rem; align-items: center; margin-left: auto; flex-wrap: wrap; min-width: 0; }
-.library-filter-actions .filter-trigger { flex: none; max-width: 10rem; padding: 0.4rem 0.55rem; min-height: 2.2rem; background: transparent; color: var(--muted); border: 0; font-size: 0.75rem; }
+.library-filter-actions .filter-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: 0.45rem; flex: none; max-width: 10rem; padding: 0.4rem 0.55rem; min-height: 2.2rem; background: transparent; color: var(--muted); border: 0; font-size: 0.75rem; }
+.library-filter-actions .filter-chevron { flex: none; }
 .library-filter-actions .filter-trigger > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .library-filter-actions .filter-trigger.has-filter { color: var(--green); background: var(--green-soft); }
 .library-filter-actions .select-trigger { min-height: 2.2rem; background: transparent; font-size: 0.75rem; }

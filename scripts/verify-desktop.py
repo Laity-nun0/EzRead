@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -123,6 +124,17 @@ def main():
                 assert value['windowTitle'] == '\u200b', value
                 assert value['page']['desktop'] and value['page']['body'] and value['page']['closeHook'], value
                 assert value['page']['cards'] == Handler.paper_count, value
+                assert [item['theme'] for item in value['themes']] == ['paper', 'graphite', 'paper']
+                for item in value['themes']:
+                    dark = item['theme'] == 'graphite'
+                    assert item['darkResult'] == 0, item
+                    assert item['applied'] == dark and item['dark'] == int(dark), item
+                    assert item['captured'], item
+                    assert item['captionResult'] == item['textResult'] == 0, item
+                    with Image.open(f"{report}.titlebar-{item['theme']}.png") as bar:
+                        center = bar.convert('RGB').getpixel((bar.width // 2, bar.height // 2))
+                        expected = (24, 28, 34) if dark else (241, 243, 246)
+                        assert all(abs(actual - wanted) <= 3 for actual, wanted in zip(center, expected)), (item, center)
                 layouts = value['layouts']
                 assert len(layouts) == 3, value
                 if options.varied_cards:
@@ -232,6 +244,8 @@ def main():
                     if not options.expect_background_shift: assert abs(value['settingsBackground']['beforeZoom'] - value['settingsBackground']['afterZoom']) < .0001, value
                 output = ROOT / 'output'
                 output.mkdir(exist_ok=True)
+                for theme in ('paper', 'graphite'):
+                    (output / f'ezread-native-titlebar-{theme}.png').write_bytes(Path(f'{report}.titlebar-{theme}.png').read_bytes())
                 for width in (1366, 1920, 2560):
                     (output / f'ezread-native-five-columns-{width}.png').write_bytes(Path(f'{report}.{width}.png').read_bytes())
                 for label in checks:
