@@ -1,0 +1,57 @@
+[
+  {
+    "file": "GoNoto-UNLICENSE.txt",
+    "sha256": "93b59296492209e4b1a1e573d302eef2f85ac830644c1482f9f80a7c75b0a8ec",
+    "url": "https://raw.githubusercontent.com/satbyy/go-noto-universal/master/UNLICENSE.txt"
+  },
+  {
+    "file": "SourceHan-OFL.txt",
+    "sha256": "cc6e759572f45be3ff001e8ac08f855fc913c8797373e7cab71ba4c63e1d6b02",
+    "url": "https://raw.githubusercontent.com/Pal3love/Source-Han-TrueType/master/LICENSE.txt"
+  },
+  {
+    "file": "LXGW-OFL.txt",
+    "sha256": "1a25e35da1031c6c3436fde545bb9cb5aca954e9873afe510c834b8b79bd21a0",
+    "url": "https://raw.githubusercontent.com/lxgw/LxgwWenKai/main/OFL.txt"
+  },
+  {
+    "file": "Klee-OFL.txt",
+    "sha256": "e376b0df8e8a2345a9533db6f0a5333a1107975569ad9d1973a7ee557161ca38",
+    "url": "https://raw.githubusercontent.com/fontworks-fonts/Klee/master/OFL.txt"
+  },
+  {
+    "file": "Noto-OFL.txt",
+    "sha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb",
+    "url": "https://raw.githubusercontent.com/notofonts/noto-fonts/main/LICENSE"
+  },
+  {
+    "file": "MaruBuri-README.md",
+    "sha256": "78b42df05fd35a433c7cec825591fac5608491f164e679802b02be7200facdc8",
+    "url": "https://raw.githubusercontent.com/fonts-archive/MaruBuri/main/README.md"
+  },
+  {
+    "file": "BabelDOC-Assets-README.md",
+    "sha256": "20b847a06b7d16057f214a3ab1c93f6996b5285e508ded3f60da32ff74d6a8a8",
+    "url": "https://raw.githubusercontent.com/funstory-ai/BabelDOC-Assets/main/README.md"
+  },
+  {
+    "file": "DocLayout-model-card.md",
+    "sha256": "ef30e30b57e315278703ddd7baf813df88f1594e2f4c0a8b2696a326a9ce8ad8",
+    "url": "https://huggingface.co/wybxc/DocLayout-YOLO-DocStructBench-onnx/raw/main/README.md"
+  },
+  {
+    "file": "Apache-2.0.txt",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+  },
+  {
+    "file": "tiktoken-MIT.txt",
+    "sha256": "418cb499b436128d653d79941333a5437b7be2ea9213dcc2f04d15d5d2c51d86",
+    "url": "https://raw.githubusercontent.com/openai/tiktoken/main/LICENSE"
+  },
+  {
+    "file": "Adobe-CMap-BSD.txt",
+    "sha256": "742665db9c8e1bc72603c6d319ca3e90b83bd6d95202f0cd4ef11068a07a9c29",
+    "url": "https://raw.githubusercontent.com/adobe-type-tools/cmap-resources/master/LICENSE.md"
+  }
+]

@@ -4,9 +4,11 @@
 
 使用自己的 API 翻译论文、围绕论文提问、生成研究速览，并对照阅读和记录笔记；也可用 Codex 按自己的阅读习惯继续改造它。
 
+本仓库基于 [zhuangcao136-glitch/EzRead](https://github.com/zhuangcao136-glitch/EzRead) 定制界面与 Windows 安装版，保留原项目的 MIT 许可和提交历史。
+
 ## 五个亮点
 
-- **简洁美观的界面**：圆润卡片、柔和配色与简洁布局，提供纸白、浅绿、石墨三种主题，把阅读体验带到 Windows 桌面。
+- **简洁美观的界面**：常驻侧栏、最近阅读与自适应论文卡片，单个日月图标切换纸白与石墨主题；书本与 AI 星芒组成简洁的新图标。
 - **DeepSeek 全文翻译与问答**：无需 Codex 登录；翻译与问答分别保存密钥和思考设置，使用官方地址及 384K 最大输出。翻译固定 Flash、默认关闭思考；问答可选 Flash / Pro、默认开启 high。连接复用但不累积整篇历史，通过本篇术语表保持译文一致。
 - **满足极简的论文阅读需求**：导入 PDF、对照阅读、翻译、提问和笔记，让日常读论文的主要操作集中在一个窗口里。
 - **自动识别与期刊分级**：导入文献时自动识别出版信息，依据按北京理工大学宇航学院期刊等级划分标准整理的内置名单，匹配“顶级、重要、其他”期刊类别，并通过卡片颜色区分；会议与预印本单独归类。名单依据与适用范围见[期刊等级说明](JOURNAL_TIERS.md)。
@@ -34,18 +36,22 @@
 
 ## 开始使用
 
-目前采用源码运行方式，主要面向 Windows。全文翻译、论文问答、研究速览和后台结构校对使用 DeepSeek API Key，无需 Codex CLI 登录；本地阅读无需密钥。
+Windows 用户可在 [Releases](https://github.com/Laity-nun0/EzRead/releases) 下载 `EzRead-3.5.2-Setup-x64.exe`，运行中文安装向导。安装版自带 Python、PDF 组件和全文翻译运行时，无需安装 Codex。缺少 WebView2 的电脑首次安装需要联网。安装与数据目录、升级和卸载说明见 [Windows 安装版](docs/INSTALLER.md)。
+
+3.5.2 安装版对应当前选定的界面版本，不包含上游随后另行开发的 PDF 校订和对话扩展。
+
+希望修改代码时仍可采用下面的源码运行方式。全文翻译、论文问答、研究速览和后台结构校对使用供应商 API Key，无需 Codex CLI 登录；本地阅读无需密钥。
 
 按需求选择获取源码的方式：
 
 - **希望跟进后续更新**：推荐使用 Git 克隆，保留版本历史，方便以后拉取作者更新。先安装 Git，再在 PowerShell 中进入希望存放软件的目录，运行：
 
   ```powershell
-  git clone https://github.com/zhuangcao136-glitch/EzRead.git
+  git clone https://github.com/Laity-nun0/EzRead.git
   ```
 
   后续更新前先导出备份、退出 EzRead，在克隆得到的 `EzRead` 文件夹中运行 `git pull --ff-only`，再让 Codex 检查依赖并重新构建桌面组件。克隆不会自动更新；如果已经修改源码，先让 Codex 检查并保存修改，再处理更新与可能的冲突。
-- **主要想自己 vibe coding，修改或新增功能**：可以直接[下载源码 ZIP](https://github.com/zhuangcao136-glitch/EzRead/archive/refs/heads/main.zip)，或在仓库首页选择 **Code → Download ZIP**，解压后交给 Codex 修改。ZIP 是一次源码快照，不包含 Git 版本历史，不能直接通过 `git pull` 获取后续更新。克隆同样支持个人定制；如果还想持续合并作者更新，建议选择克隆。
+- **主要想自己 vibe coding，修改或新增功能**：可以直接[下载源码 ZIP](https://github.com/Laity-nun0/EzRead/archive/refs/heads/main.zip)，或在仓库首页选择 **Code → Download ZIP**，解压后交给 Codex 修改。ZIP 是一次源码快照，不包含 Git 版本历史，不能直接通过 `git pull` 获取后续更新。克隆同样支持个人定制；如果还想持续合并作者更新，建议选择克隆。
 
 **PowerShell 网络提示**：如果当前网络访问 GitHub 需要代理，克隆和拉取更新前需为 Git 配置可用代理；浏览器能访问 GitHub 不代表 Git 已使用代理。可以让 Codex 检查并配置 Git 代理，地址和端口以本机代理软件为准；能直接连接时无需配置。
 
@@ -84,12 +90,12 @@
 ## 使用前了解这几件事
 
 - **API 配置与用量**：所有模型功能使用供应商 API。保存配置、启动及刷新状态不测试连接，不查询登录或账户额度。用量面板只统计本次运行的请求与供应商报告的 token，缺失项显示未知；账户余额和费用请到供应商控制台查看。连接失败保留已有结果，不自动换供应商或无限重试。
-- **数据**：论文、译文、笔记等默认保存在项目的 `data/` 中。模型功能按[发送范围](docs/AI_API.md#使用与发送范围)将必要内容发送给选定 API 供应商；导入后的结构校对在配置完整时自动执行。API 密钥保存在本机私有文件，不进入文献备份，换电脑后需重新填写；本地存储不等于 AI 离线运行。
+- **数据**：安装版默认保存在 `%LOCALAPPDATA%\EzRead\data`，源码版默认保存在项目的 `data/`；`EZREAD_DATA_DIR` 可覆盖。模型功能按[发送范围](docs/AI_API.md#使用与发送范围)将必要内容发送给选定 API 供应商；导入后的结构校对在配置完整时自动执行。API 密钥保存在本机私有文件，不进入文献备份，换电脑后需重新填写；本地存储不等于 AI 离线运行。
 - **备份**：在设置中使用“导出备份”。更新、移动软件或更换电脑前先备份，保留数据目录；移动软件后重新运行 `setup-desktop.ps1` 更新快捷方式。
 - **PDF 支持**：主要适用于文字型 PDF，目前不提供扫描件 OCR 全文翻译。复杂双栏、表格、公式及图中文字可能提取不完整，译文和回答需结合原文核对。
 
 ## 开源与反馈
 
-欢迎通过 [GitHub Issues](https://github.com/zhuangcao136-glitch/EzRead/issues) 反馈问题或提出功能建议。描述复现步骤、预期结果和实际表现即可；附图前请遮住私人论文、对话和账号信息。
+欢迎通过 [GitHub Issues](https://github.com/Laity-nun0/EzRead/issues) 反馈问题或提出功能建议。描述复现步骤、预期结果和实际表现即可；附图前请遮住私人论文、对话和账号信息。
 
-源码与项目文档采用 [MIT License](LICENSE)。内置 ECDICT 词典保留其[上游授权声明](assets/dictionaries/LICENSE-ECDICT.txt)，第三方依赖遵循各自许可证。
+源码与项目文档采用 [MIT License](LICENSE)。内置 ECDICT 词典保留其[上游授权声明](assets/dictionaries/LICENSE-ECDICT.txt)，第三方依赖遵循各自许可证。安装版包含 AGPL-3.0 的 PDF 翻译组件及其对应源码，详见[第三方声明](THIRD-PARTY-NOTICES.md)。

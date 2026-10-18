@@ -219,6 +219,6 @@ DeepSeek 全文确认窗口独立开启思考并选择 low/high/max；后端 `ap
 
 `scripts/build-desktop.ps1` 从微软 NuGet 下载并校验固定 SDK，使用 Windows 自带的 .NET Framework 编译器生成 x64 桌面组件。构建产物与下载缓存均不提交。`scripts/verify-desktop.py` 使用临时 profile 和模拟接口，对真实 WebView2 做重复启动、关闭重开、图标像素和草稿恢复检查；不调用模型或改写真实文献库。
 
-当前仅维护源码运行方式。用户按 README 配置本机环境，通过 `启动EzRead.vbs` 或 `launch.pyw` 启动；个人定制流程见 `CONTRIBUTING.md`。文献默认保存在源码目录的 `data/`，`EZREAD_DATA_DIR` 可指定独立目录，更新源码不自动迁移或清理文献。
+源码方式通过 `启动EzRead.vbs` 或 `launch.pyw` 启动；个人定制流程见 `CONTRIBUTING.md`。Windows 安装版通过 `desktop/EzRead.Launcher.cs` 编译的 `EzRead.exe` 调用私有嵌入 Python，再沿用相同启动与关闭协议。源码库默认在 `data/`，安装入口默认设置为 `%LOCALAPPDATA%\EzRead\data`；`EZREAD_DATA_DIR` 可覆盖。更新与卸载不自动迁移或清理文献。构建白名单、固定运行时和验证流程见 `docs/INSTALLER.md`。
 
 主项目源码与文档采用根目录 [MIT License](../LICENSE)。内置词典及第三方依赖保留各自授权文本，个人文献库和本机归档不属于公开源码。
