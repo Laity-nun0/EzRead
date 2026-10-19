@@ -147,6 +147,48 @@ const edge = process.env.EZREAD_BROWSER || path.join(process.env['PROGRAMFILES(X
     await page.waitForFunction(() => state.readerPage === 4);
     await page.locator('.workspace > .reader-tabs .reader-tab-library').click();
     await page.waitForSelector('#reader-dialog[open]', { state: 'hidden' });
+    // 验证创建、取消与删除，以及刷新后论文和本机文件仍可用。
+    await resetScroll();
+    const createCollection = async name => {
+      await page.locator('#new-collection').click();
+      await page.locator('#collection-name').fill(name);
+      await page.locator('#collection-form button[type="submit"]').click();
+      await page.waitForSelector('#collection-dialog[open]', { state: 'hidden' });
+    };
+    const emptyName = '空合集 / 删除? #验证';
+    await createCollection(emptyName);
+    const emptyDelete = page.getByRole('button', { name: `删除合集「${emptyName}」`, exact: true });
+    page.once('dialog', dialog => dialog.dismiss());
+    await emptyDelete.click();
+    assert.equal(await emptyDelete.count(), 1, '取消时保留合集');
+    page.once('dialog', dialog => dialog.accept());
+    await emptyDelete.click();
+    await page.waitForFunction(() => state.view === 'all' && !allCollections().includes('空合集 / 删除? #验证'));
+    await ready();
+    const collectionName = '界面与损伤';
+    const members = await page.evaluate(name => state.papers.filter(p => p.collection === name).map(p => p.id), collectionName);
+    const beforePaper = await (await page.request.get(`${origin}/api/papers/${members[0]}`)).json();
+    await page.setViewportSize({ width: 960, height: 800 });
+    await page.locator('.collection-nav').filter({ hasText: collectionName }).click();
+    const deleteButton = page.getByRole('button', { name: `删除合集「${collectionName}」`, exact: true });
+    await deleteButton.focus();
+    await page.screenshot({ path: path.join(output, 'collection-delete-narrow.png') });
+    page.once('dialog', async dialog => {
+      assert.match(dialog.message(), /论文、文件、译文和笔记都会保留/);
+      await dialog.accept();
+    });
+    await deleteButton.press('Enter');
+    await page.waitForFunction(() => state.view === 'all' && !allCollections().includes('界面与损伤'));
+    await page.reload(); await ready();
+    assert.equal(await page.locator('.paper-card').count(), 45);
+    assert.equal(await page.getByRole('button', { name: `删除合集「${collectionName}」`, exact: true }).count(), 0);
+    assert.equal(await page.locator('.collection-nav').filter({ hasText: '机器人感知' }).count(), 1);
+    const papersAfter = await (await page.request.get(origin + '/api/papers')).json();
+    assert.ok(papersAfter.papers.filter(p => members.includes(p.id)).every(p => p.collection === ''));
+    const afterPaper = await (await page.request.get(`${origin}/api/papers/${members[0]}`)).json();
+    for (const key of ['notes', 'blocks', 'reader_state', 'pdf_layout_translation']) assert.deepEqual(afterPaper[key], beforePaper[key]);
+    assert.equal((await page.request.get(`${origin}/media/${members[0]}/original.pdf`)).status(), 200);
+    report.collectionDeletion = { empty: true, cancelled: true, populated: true, keyboard: true, persisted: true, papersPreserved: 45 };
     const fixture = await (await page.request.get(origin + '/__test/library-state')).json();
     assert.deepEqual(fixture.forbiddenCalls, []);
     assert.deepEqual(report.errors, []); assert.deepEqual(report.externalRequests, []);

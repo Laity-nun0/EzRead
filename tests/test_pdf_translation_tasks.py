@@ -174,6 +174,115 @@ class PdfTranslationTests(unittest.TestCase):
         self.session_factory.assert_called_once_with({**CONFIG, 'thinking': 'disabled'}, 'synthetic-test-key',
             usage=collector, diagnostics_dir=layout.run_folder(server, PID, task['run_id']) / 'api-diagnostics')
 
+    def working_files(self, folder):
+        working = folder / 'native/working/original'
+        working.mkdir(parents=True, exist_ok=True)
+        names = ('input.pdf', 'mig_toc_temp.pdf', 'temp_subset_input_mono.pdf', 'temp_subset_output_mono.pdf',
+                 'temp_save_input_dual.pdf', 'temp_save_output_dual.pdf', 'translate_tracking.json', 'unknown.pdf')
+        for name in names:
+            (working / name).write_bytes(name.encode())
+        (folder / 'native-input').mkdir(exist_ok=True)
+        (folder / 'native-input/original.pdf').write_bytes(b'normalized working input')
+        (folder / 'rotation-normalization.json').write_text('{}', encoding='utf-8')
+        return working
+
+    def test_success_cleans_only_known_intermediate_pdfs_and_keeps_evidence(self):
+        def engine(root, source, folder, **kwargs):
+            self.working_files(folder)
+            (folder / 'native-text-audit.json').write_text('{}', encoding='utf-8')
+            return self.engine(root, source, folder, **kwargs)
+        self.start()
+        self.run_queue(engine=engine, quality={'status': 'needs_review', 'failures': [], 'warnings': []})
+        saved = server.get_doc(PID)
+        self.assertEqual(saved[layout.TASK]['status'], 'completed')
+        folder = layout.run_folder(server, PID, saved[layout.CURRENT]['id'])
+        self.assertEqual(sorted(p.name for p in (folder / 'native/working/original').iterdir()),
+                         ['translate_tracking.json', 'unknown.pdf'])
+        self.assertTrue((folder / 'native-replies').is_dir())
+        self.assertFalse((folder / 'native-input/original.pdf').exists())
+        for name in ('result.pdf', 'bilingual.pdf', 'artifact.json', 'native-session.json',
+                     'native-text-audit.json', 'body-quality.json', 'api-usage.json', 'rotation-normalization.json'):
+            self.assertTrue((folder / name).is_file(), name)
+        self.assertTrue(self.original.is_file())
+        self.assertEqual(layout.cleanup_completed_run(server, PID, saved[layout.CURRENT]['id']),
+                         {'removed_files': 0, 'removed_bytes': 0})
+
+    def test_failed_cancelled_and_uncommitted_tasks_keep_working_pdfs(self):
+        for mode in ('failed', 'cancelled', 'uncommitted'):
+            with self.subTest(mode=mode):
+                self.start(retranslate=True)
+                run_id = server.get_doc(PID)[layout.TASK]['run_id']
+                folder = layout.run_folder(server, PID, run_id)
+                def engine(root, source, folder, **kwargs):
+                    self.working_files(folder)
+                    if mode == 'failed':
+                        raise ValueError('模拟排版中断')
+                    result = self.engine(root, source, folder, **kwargs)
+                    if mode == 'cancelled':
+                        kwargs['cancel_event'].set()
+                    else:
+                        server.update_doc(PID, lambda d: d['blocks'][0].update(text_override='用户新校订'))
+                    return result
+                self.run_queue(engine=engine)
+                self.assertIn(server.get_doc(PID)[layout.TASK]['status'], ('error', 'paused'))
+                self.assertTrue((folder / 'native/working/original/input.pdf').is_file())
+                self.assertTrue((folder / 'native-input/original.pdf').is_file())
+                with self.assertRaisesRegex(ValueError, '已成功提交'):
+                    layout.cleanup_completed_run(server, PID, run_id)
+                server.update_doc(PID, lambda d: d['blocks'][0].pop('text_override', None))
+
+    def test_cleanup_keeps_referenced_output_even_if_it_has_a_temporary_name(self):
+        def engine(root, source, folder, **kwargs):
+            working = self.working_files(folder)
+            result = self.engine(root, source, folder, **kwargs)
+            (working / 'input.pdf').write_bytes((folder / result['mono_pdf']).read_bytes())
+            result['mono_pdf'] = 'native/working/original/input.pdf'
+            return result
+        self.start()
+        self.run_queue(engine=engine)
+        saved = server.get_doc(PID)
+        self.assertEqual(saved[layout.TASK]['status'], 'completed')
+        folder = layout.run_folder(server, PID, saved[layout.CURRENT]['id'])
+        self.assertTrue((folder / saved[layout.CURRENT]['mono']).is_file())
+        self.assertFalse((folder / 'native/working/original/mig_toc_temp.pdf').exists())
+
+    def test_cleanup_verifies_source_outputs_and_links_before_deleting(self):
+        self.start()
+        self.run_queue()
+        saved = server.get_doc(PID)
+        run_id = saved[layout.CURRENT]['id']
+        folder = layout.run_folder(server, PID, run_id)
+        working = self.working_files(folder)
+        for path in (self.original, folder / saved[layout.CURRENT]['mono'], folder / saved[layout.CURRENT]['dual']):
+            content = path.read_bytes()
+            path.write_bytes(content + b'changed')
+            with self.assertRaises(ValueError):
+                layout.cleanup_completed_run(server, PID, run_id)
+            self.assertTrue((working / 'input.pdf').is_file())
+            path.write_bytes(content)
+        with patch.object(Path, 'is_symlink', autospec=True, side_effect=lambda path: path == working):
+            with self.assertRaisesRegex(ValueError, '包含链接'):
+                layout.cleanup_completed_run(server, PID, run_id)
+        self.assertTrue((working / 'input.pdf').is_file())
+
+    def test_cleanup_io_failure_does_not_turn_published_translation_into_error(self):
+        def engine(root, source, folder, **kwargs):
+            self.working_files(folder)
+            return self.engine(root, source, folder, **kwargs)
+        unlink = Path.unlink
+        def blocked(path, *args, **kwargs):
+            if path.name == 'input.pdf':
+                raise PermissionError('模拟文件占用')
+            return unlink(path, *args, **kwargs)
+        self.start()
+        with patch.object(Path, 'unlink', autospec=True, side_effect=blocked):
+            self.run_queue(engine=engine)
+        saved = server.get_doc(PID)
+        self.assertEqual(saved[layout.TASK]['status'], 'completed')
+        folder = layout.run_folder(server, PID, saved[layout.CURRENT]['id'])
+        self.assertTrue((folder / 'native/working/original/input.pdf').is_file())
+        self.assertEqual(layout.cleanup_completed_run(server, PID, saved[layout.CURRENT]['id'])['removed_files'], 7)
+
     def test_uncertain_quantity_publishes_as_needs_review_and_reuses_response(self):
         self.units = [unit('90 MT')]
         self.start()

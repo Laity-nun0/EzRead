@@ -70,6 +70,29 @@ const edge = process.env.EZREAD_BROWSER || path.join(process.env['PROGRAMFILES(X
     await page.evaluate(()=>closeReader());
     await page.evaluate(id=>openReader(id),pid);
     assert.equal(await page.locator('.reader-pdf-layout-page').count(),2,'An existing translated PDF opens automatically despite retired text preference and drafts.');
+    await page.waitForFunction(()=>[...readerPdf.panes.values()].every(p=>p.entries.some(e=>e.visible&&e.drawn===e.target&&e.drawn)&&p.entries.filter(e=>e.active).every(e=>e.drawn===e.target&&e.drawn)));
+    await page.evaluate(async()=>{
+      const entry=readerPdf.panes.get('original').entries[0],pdfPage=await entry.pane.record.document.getPage(1),render=pdfPage.render.bind(pdfPage);
+      window.__pdfBefore={canvas:entry.canvas,width:entry.canvas.width,image:entry.canvas.toDataURL(),text:entry.layer.firstChild};
+      pdfPage.render=options=>{
+        pdfPage.render=render;
+        const canvas=options.canvasContext.canvas;
+        options.canvasContext.fillStyle='#ff00ff';options.canvasContext.fillRect(0,0,canvas.width,canvas.height);
+        window.__pdfPartialConnected=canvas.isConnected;
+        let task;
+        return {promise:new Promise(resolve=>{window.__pdfFinish=resolve;}).then(()=>{task=render(options);return task.promise;}),cancel(){task?.cancel();}};
+      };
+      readerSetZoom(125);
+    });
+    await page.waitForFunction(()=>typeof window.__pdfFinish==='function');
+    await page.waitForTimeout(100);
+    assert.deepEqual(await page.evaluate(()=>({connected:window.__pdfPartialConnected,widthUnchanged:window.__pdfBefore.canvas.width===window.__pdfBefore.width,imageUnchanged:window.__pdfBefore.canvas.toDataURL()===window.__pdfBefore.image,textConnected:window.__pdfBefore.text.isConnected})),{connected:false,widthUnchanged:true,imageUnchanged:true,textConnected:true},'A PDF redraw keeps every displayed pixel and text node until the replacement raster is complete.');
+    await page.screenshot({path:path.join(root,'work/reader-pdf-atomic-redraw.png')});
+    await page.evaluate(()=>window.__pdfFinish());
+    await page.waitForFunction(()=>{const e=readerPdf.panes.get('original').entries[0];return e.drawn===e.target&&e.canvas.width>window.__pdfBefore.width;});
+    await page.evaluate(()=>readerSetZoom('fit'));
+    await page.waitForFunction(()=>{const e=readerPdf.panes.get('original').entries[0];return e.drawn===e.target&&e.canvas.width===window.__pdfBefore.width;});
+    checks.push('PDF redraw keeps the previous raster and text visible across browser frames and commits only a complete offscreen render');
     const notes=page.getByRole('button',{name:'笔记',exact:true}); await notes.click();
     await page.locator('#reader-notes-text').fill('PDF reader persistent note');
     await page.evaluate(()=>readerSaveNotes());

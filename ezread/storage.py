@@ -5,6 +5,7 @@ from .preferences import THEMES
 import copy
 import contextlib
 import json
+import re
 import sqlite3
 
 
@@ -100,3 +101,24 @@ def settings(app: ApplicationContext):
     if out.get('theme') not in THEMES:
         out['theme'] = app.DEFAULT_SETTINGS['theme']
     return out
+
+
+def delete_collection(app: ApplicationContext, name):
+    """原子移除合集及其归属，保留文献和历史回收站中的内容。"""
+    if not isinstance(name, str) or not name.strip() or len(name) > 100 or re.search(r'[\x00-\x1f]', name):
+        raise ValueError('合集名称须为不超过 100 字的非空单行文字。')
+    with app.LOCK, app.db() as con:
+        con.execute('BEGIN IMMEDIATE')
+        row = con.execute("SELECT value FROM settings WHERE key='collections'").fetchone()
+        collections = json.loads(row[0]) if row else app.DEFAULT_SETTINGS['collections']
+        con.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',
+                    ('collections', json.dumps([item for item in collections if item != name], ensure_ascii=False)))
+        for pid, raw in con.execute('SELECT id,doc FROM papers').fetchall():
+            doc = json.loads(raw)
+            if doc.get('collection') != name:
+                continue
+            doc['collection'] = ''
+            doc['collection_assignment'] = {'status': 'manual', 'name': '', 'error': ''}
+            doc['updated_at'] = app.now()
+            con.execute('UPDATE papers SET doc=? WHERE id=?', (json.dumps(doc, ensure_ascii=False), pid))
+    return {'settings': app.settings()}

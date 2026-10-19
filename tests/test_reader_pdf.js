@@ -7,7 +7,7 @@ function node(tag, attrs = {}, ...children) {
     classList: { add: (...names) => names.forEach(n => classes.add(n)), remove: (...names) => names.forEach(n => classes.delete(n)), contains: n => classes.has(n) },
     style: { setProperty(k, v) { this[k] = v; } }, box: { top: 0, bottom: 600, width: 500, height: 600 },
     addEventListener() {}, removeEventListener() {}, getBoundingClientRect() { return this.box; },
-    getContext() { return { canvas: this }; }, contains(other) { return walk(this).includes(other); },
+    getContext() { return { canvas: this, drawImage(source) { this.canvas.bitmap = source.bitmap; } }; }, contains(other) { return walk(this).includes(other); },
     append(...items) { for (const item of items.flat().filter(x => x != null)) { this.children.push(item); if (typeof item === "object") item.parent = this; } },
     replaceChildren(...items) { this.children = []; this.append(...items); }, remove() { if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this); },
     get childElementCount() { return this.children.filter(x => typeof x === "object").length; } };
@@ -15,7 +15,7 @@ function node(tag, attrs = {}, ...children) {
 }
 function walk(root) { return [root, ...root.children.flatMap(child => typeof child === "object" ? walk(child) : [])]; }
 function find(selector, root) { return walk(root).filter(n => selector.startsWith(".") ? n.classList.contains(selector.slice(1)) : n.tag === selector); }
-const frames = new Map(), pendingPages = [], pendingRenders = [];
+const frames = new Map(), pendingPages = [], pendingRenders = [], renderCanvases = [];
 let frame = 0, opened = 0, destroyed = 0, cancelled = 0, fail = false, slow = false, slowPage = false, selection = null, parameters;
 const library = { getDocument(options) {
   opened++; parameters = options;
@@ -23,7 +23,14 @@ const library = { getDocument(options) {
     if (slowPage) await new Promise(resolve => pendingPages.push(resolve));
     return {
     userUnit: 1, getViewport: ({ scale }) => ({ width: 595 * scale, height: 842 * scale, scale }), streamTextContent: () => ({}),
-    render() { let resolve; const promise = slow ? new Promise(done => { resolve = done; pendingRenders.push(done); }) : Promise.resolve(); return { promise, cancel() { cancelled++; resolve?.(); } }; }
+    render({ canvasContext }) {
+      renderCanvases.push(canvasContext.canvas);
+      canvasContext.canvas.bitmap = "partial";
+      let resolve;
+      const promise = (slow ? new Promise(done => { resolve = done; pendingRenders.push(done); }) : Promise.resolve())
+        .then(() => { canvasContext.canvas.bitmap = "complete"; });
+      return { promise, cancel() { cancelled++; resolve?.(); } };
+    }
   }; } }) };
 }, TextLayer: class { constructor({ container }) { this.container = container; } async render() { this.container.append(node("span", {}, "copyable PDF text")); } cancel() {} } };
 const context = { console, el: node, safeUrl: x => x, $: (selector, root) => find(selector, root)[0], $$: find,
@@ -82,6 +89,14 @@ async function main() {
   context.readerPdfDispose(); await flush();
   assert.equal(context.P.documents.size, 0);
   fail = false;
+  slow = true;
+  const opening = pane(1); context.readerPdfMount("opening", opening.root, "/opening.pdf", "opening", opening.pages); await flush(2);
+  assert.ok(pendingRenders.length);
+  assert.equal(find("canvas", opening.entries[0])[0].width, 1, "首次加载不能显示尚未画完的 PDF 画布。");
+  assert.notEqual(find("canvas", opening.entries[0])[0].bitmap, "partial");
+  slow = false; pendingRenders.splice(0).forEach(resolve => resolve()); await flush();
+  assert.equal(find("canvas", opening.entries[0])[0].bitmap, "complete");
+  context.readerPdfDispose(); await flush();
   const racing = pane(1); context.readerPdfMount("race", racing.root, "/race.pdf", "race", racing.pages); await flush();
   const originalSpan = find("span", racing.entries[0])[0], originalWidth = find("canvas", racing.entries[0])[0].width;
   slowPage = true; racing.entries[0].box.width = 600; context.readerPdfScan(); await flush(2);
@@ -92,17 +107,21 @@ async function main() {
   assert.equal(find("canvas", racing.entries[0])[0].width, originalWidth);
   selection = null; context.readerPdfScan(); await flush();
   assert.notEqual(find("span", racing.entries[0])[0], originalSpan, "Clearing the selection permits the delayed page redraw.");
-  const renderSpan = find("span", racing.entries[0])[0];
+  const renderSpan = find("span", racing.entries[0])[0], displayedCanvas = find("canvas", racing.entries[0])[0], displayedWidth = displayedCanvas.width;
   slow = true; racing.entries[0].box.width = 700; context.readerPdfScan(); await flush(2);
   assert.ok(pendingRenders.length);
+  assert.equal(displayedCanvas.width, displayedWidth, "重绘期间保留原画布，不能先清空已经显示的论文。");
+  assert.equal(displayedCanvas.bitmap, "complete", "不能向用户显示逐步绘制中的文字和图形。");
   selection = { rangeCount: 1, isCollapsed: false, anchorNode: renderSpan };
   slow = false; pendingRenders.splice(0).forEach(resolve => resolve()); await flush();
   assert.equal(find("span", racing.entries[0])[0], renderSpan, "A selection made during canvas rendering survives text-layer cleanup.");
+  assert.equal(displayedCanvas.width, displayedWidth, "中途产生文字选区时也不能提交新的画布。");
   selection = null; context.readerPdfScan(); await flush();
   assert.notEqual(find("span", racing.entries[0])[0], renderSpan);
   assert.equal(find("canvas", racing.entries[0])[0].width, 1400);
   assert.equal(racing.entries[0].dataset.pdfState, "loaded");
   context.readerPdfDispose(); await flush();
-  console.log("PDF rendering scheduler passed: shared documents, lazy raster allocation, DPR scaling, pixel budget, cancellation, explicit failure and close cleanup.");
+  assert.ok(renderCanvases.every(canvas => canvas.width === 1 && canvas.height === 1), "完成、取消或选区保护后都应释放离屏缓冲区。");
+  console.log("PDF rendering scheduler passed: shared documents, lazy raster allocation, DPR scaling, pixel budget, atomic raster display, cancellation, explicit failure and close cleanup.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -566,7 +566,12 @@ def handler_for(app: ApplicationContext):
                 self.send_json({'error': '拒绝跨站请求。'}, 403)
                 return
             try:
-                match = re.fullmatch(r'/api/papers/([a-f0-9]{16})', urllib.parse.urlparse(self.path).path)
+                path = urllib.parse.urlparse(self.path).path
+                if path.startswith('/api/collections/'):
+                    name = urllib.parse.unquote(path[len('/api/collections/'):])
+                    self.send_json(app.delete_collection(name))
+                    return
+                match = re.fullmatch(r'/api/papers/([a-f0-9]{16})', path)
                 if not match:
                     raise ValueError('接口不存在。')
                 pid = match.group(1)

@@ -44,6 +44,7 @@ class ApplicationContext(Protocol):
     codex_status: Callable[..., Any]
     commit_import_result: Callable[..., Any]
     db: Callable[..., Any]
+    delete_collection: Callable[..., Any]
     delete_paper: Callable[..., Any]
     enqueue: Callable[..., Any]
     enrich_publication: Callable[..., Any]

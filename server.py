@@ -92,6 +92,10 @@ def settings():
     return _storage.settings(_context)
 
 
+def delete_collection(name):
+    return _storage.delete_collection(_context, name)
+
+
 valid_year = _preferences.valid_year
 
 

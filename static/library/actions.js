@@ -6,6 +6,19 @@ async function loadLibrary(showLoading = false) {
   if (typeof readerTabsRestore === "function") await readerTabsRestore();
 }
 function allCollections() { return [...new Set([...state.collections, ...list(state.settings.collections), ...state.papers.map(p => p.collection).filter(Boolean)])].sort((a, b) => String(a).localeCompare(String(b), "zh-CN")); }
+async function deleteCollection(name) {
+  if (!confirm(`删除合集「${name}」？其中的论文、文件、译文和笔记都会保留，仍可在“全部论文”中查看。`)) return;
+  const data = await api(`/api/collections/${encodeURIComponent(name)}`, { method: "DELETE" });
+  state.settings = { ...state.settings, ...data.settings };
+  state.collections = state.collections.filter(item => item !== name);
+  for (const paper of state.papers.filter(p => p.collection === name)) updatePaper({ id: paper.id, collection: "" });
+  if (state.view === "collection" && state.collection === name) {
+    state.view = "all"; state.collection = ""; $("#search").placeholder = "搜索论文…";
+  }
+  await loadLibrary();
+  $(".nav-item[data-view='all']")?.focus({ preventScroll: true });
+  toast(`合集「${name}」已删除，论文已保留`);
+}
 async function movePapers(ids, collection) {
   if (!allCollections().includes(collection)) throw new Error("合集不存在，请刷新后重试");
   let moved = 0;

@@ -76,7 +76,7 @@ jobs:
             Write-Host 'Release already exists; keeping its verified assets.'
             exit 0
           }
-          gh release create $env:GITHUB_REF_NAME output/releases/* --verify-tag --latest=false --title "EzRead $env:GITHUB_REF_NAME Windows 安装版" --notes-file docs/WINDOWS_RELEASE.md
+          gh release create $env:GITHUB_REF_NAME output/releases/* --verify-tag --latest --title "EzRead $env:GITHUB_REF_NAME Windows 安装版" --notes-file docs/WINDOWS_RELEASE.md
       - uses: actions/upload-artifact@v4
         if: always()
         with:

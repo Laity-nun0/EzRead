@@ -96,6 +96,9 @@ body:has(#reader-dialog[open]) .library-view { display: none; }
 .nav-count { font-size: 0.7rem; background: transparent; color: inherit; }
 .sidebar .collection-heading { margin: 1.8rem 0 0.5rem; padding: 1rem 0.6rem 0; border-top: 1px solid var(--line); font-weight: 500; }
 .sidebar .collections-nav { max-height: none; overflow: visible; }
+.collection-row { display: flex; align-items: center; gap: 0.15rem; }
+.collection-row .collection-nav { flex: 1; min-width: 0; }
+.collection-row > .icon-button { flex: none; color: var(--muted); }
 .collection-dot { width: 0.4rem; height: 0.4rem; margin: 0.3rem; background: var(--green); border-radius: 50%; flex: none; }
 .sidebar .sidebar-bottom { flex: none; padding-top: 0.8rem; margin-top: 0.75rem; border-top: 1px solid var(--line); background: var(--side); }
 #theme-toggle { width: 2rem; height: 100%; flex: none; border-radius: 0.5rem; color: var(--text); }

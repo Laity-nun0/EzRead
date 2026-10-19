@@ -36,6 +36,28 @@
     const captured=readerCapturePosition();await saveReadPage();await closeReader();
     await wait(()=>readerPdf.documents.size===0&&readerPdf.panes.size===0,'Closing leaked PDF workers');
     await openReader(pid);assert(state.readerPage===captured.page,`Saved page was not restored: captured=${captured.page}, reopened=${state.readerPage}`);assert(document.querySelectorAll('.reader-pdf-layout-page').length===2,'Existing PDF translation was not opened');
+    await wait(()=>[...readerPdf.panes.values()].every(p=>p.entries.some(e=>e.visible&&e.drawn===e.target&&e.drawn)&&p.entries.filter(e=>e.active).every(e=>e.drawn===e.target&&e.drawn)),'Reopened PDF did not finish rendering');
+    const entry=readerPdf.panes.get('layout').entries.find(e=>e.visible),canvas=entry.canvas,beforeImage=canvas.toDataURL(),beforeWidth=canvas.width,text=entry.layer.firstChild;
+    const pdfPage=await entry.pane.record.document.getPage(entry.number),render=pdfPage.render.bind(pdfPage);
+    let finish,partialConnected;
+    pdfPage.render=options=>{
+      pdfPage.render=render;
+      const buffer=options.canvasContext.canvas;
+      options.canvasContext.fillStyle='#ff00ff';options.canvasContext.fillRect(0,0,buffer.width,buffer.height);
+      partialConnected=buffer.isConnected;
+      let task;
+      return {promise:new Promise(resolve=>{finish=resolve;}).then(()=>{task=render(options);return task.promise;}),cancel(){task?.cancel();}};
+    };
+    const previousZoom=state.settings.reader_zoom||100;
+    readerSetTextZoom(previousZoom===100?125:100);
+    await wait(()=>finish,'Native PDF redraw did not start');
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    assert(partialConnected===false&&canvas.width===beforeWidth&&canvas.toDataURL()===beforeImage&&text.isConnected,'Native redraw exposed an incomplete or cleared PDF page');
+    finish();
+    await wait(()=>entry.drawn===entry.target&&entry.canvas.width!==beforeWidth,'Native redraw did not commit the finished raster');
+    readerSetTextZoom(previousZoom);
+    await wait(()=>entry.drawn===entry.target&&entry.canvas.width===beforeWidth,'Native PDF zoom was not restored');
+    checks.push('native PDF redraw retains existing pixels and selectable text until the offscreen raster is complete');
     assert(JSON.parse(localStorage.getItem(`ezread-reader-block:${pid}`)).value==='legacy draft','Legacy paragraph draft was changed');
     assert(JSON.parse(localStorage.getItem(`ezread-reader-text-action:${pid}`)).value==='legacy revision draft','Legacy selection draft was changed');
     const after=(await (await fetch('/__test/state')).json()).doc;

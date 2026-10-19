@@ -178,12 +178,18 @@ async function readerPdfRender(entry, generation, key) {
   const budget = readerPdfBudget();
   if (budget < 1) return;
   const ratio = Math.min(Math.max(1, window.devicePixelRatio || 1), Math.sqrt(budget / (viewport.width * viewport.height)));
-  entry.canvas.width = Math.max(1, Math.floor(viewport.width * ratio)); entry.canvas.height = Math.max(1, Math.floor(viewport.height * ratio));
   entry.node.style.aspectRatio = `${base.width}/${base.height}`;
-  entry.node.dataset.pdfPixelRatio = String(ratio); entry.node.dataset.pdfState = "rendering";
-  entry.task = page.render({ canvasContext: entry.canvas.getContext("2d", { alpha: false }), viewport, transform: [ratio, 0, 0, ratio, 0, 0] });
-  await entry.task.promise;
-  if (!pane.alive || entry.generation !== generation || !entry.node.isConnected || readerPdfSelected(entry)) return;
+  entry.node.dataset.pdfState = "rendering";
+  // PDF.js 会分帧绘制；先在离屏画布完成，避免清空当前页面或露出半成品。
+  const buffer = el("canvas", { width: Math.max(1, Math.floor(viewport.width * ratio)), height: Math.max(1, Math.floor(viewport.height * ratio)) });
+  try {
+    entry.task = page.render({ canvasContext: buffer.getContext("2d", { alpha: false }), viewport, transform: [ratio, 0, 0, ratio, 0, 0] });
+    await entry.task.promise;
+    if (!pane.alive || entry.generation !== generation || !entry.node.isConnected || readerPdfSelected(entry)) return;
+    entry.canvas.width = buffer.width; entry.canvas.height = buffer.height;
+    entry.canvas.getContext("2d", { alpha: false }).drawImage(buffer, 0, 0);
+    entry.node.dataset.pdfPixelRatio = String(ratio);
+  } finally { buffer.width = buffer.height = 1; }
   entry.layer.replaceChildren();
   // These variables match the official PDF.js 6.4 TextLayer stylesheet/API.
   entry.layer.style.setProperty("--scale-factor", String(viewport.scale));

@@ -8,6 +8,8 @@ import math
 from pathlib import Path
 import re
 import secrets
+import stat
+import sys
 import time
 
 from . import pdf_layout_quality, translation_numbers
@@ -259,6 +261,52 @@ def _cache_sources(folder, task, identity):
     return sources, diagnostics
 
 
+def cleanup_completed_run(app: ApplicationContext, pid, run_id):
+    """只清理已提交版本的已知排版临时 PDF，保留缓存和全部核对记录。"""
+    with app.LOCK:
+        doc = app.get_doc(pid)
+        task, artifact = doc.get(TASK, {}), doc.get(CURRENT, {})
+        if (doc.get('deleted') or task.get('status') != 'completed'
+                or task.get('run_id') != run_id or artifact.get('id') != run_id):
+            raise ValueError('仅可清理已成功提交的当前版式任务。')
+        folder = run_folder(app, pid, run_id)
+        source = source_file(app, pid)
+        if file_hash(source) != artifact.get('source_hash'):
+            raise ValueError('原 PDF 已变化，未清理中间文件。')
+        protected = {source}
+        for key in ('mono', 'dual'):
+            output = _output_file(folder, artifact[key])
+            if file_hash(output) != artifact.get(key + '_hash'):
+                raise ValueError('已提交译文缺失或已变化，未清理中间文件。')
+            protected.add(output)
+        working = folder / 'native' / 'working'
+        candidates = []
+        paths = []
+        for path in sorted(working.rglob('*.pdf')):
+            if re.fullmatch(r'(?:input|mig_toc_temp|watermarked_temp_input|'
+                            r'temp_(?:subset|save)_(?:input|output)_[a-zA-Z0-9_-]+)\.pdf', path.name):
+                paths.append((path, working))
+        normalized = folder / 'native-input' / source.name
+        if normalized.exists() or normalized.is_symlink():
+            paths.append((normalized, normalized.parent))
+        for path, boundary in paths:
+            for part in (path, *path.parents):
+                info = part.lstat()
+                if part.is_symlink() or getattr(info, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                    raise ValueError('中间文件路径包含链接，未清理。')
+            resolved = path.resolve()
+            if not resolved.is_relative_to(boundary.resolve()) or not path.is_file():
+                raise ValueError('中间文件路径无效，未清理。')
+            if resolved not in protected:
+                candidates.append(path)
+        removed_bytes = 0
+        for path in candidates:
+            size = path.stat().st_size
+            path.unlink()
+            removed_bytes += size
+        return {'removed_files': len(candidates), 'removed_bytes': removed_bytes}
+
+
 def execute(app: ApplicationContext, pid, event):
     from contextlib import ExitStack
     import codex_bridge
@@ -424,6 +472,11 @@ def execute(app: ApplicationContext, pid, event):
         d[TASK].update(status='completed', **counts(), total=cache.done, warnings=warnings,
                        stage='已生成版式译文，部分内容需核对' if warnings else '已生成版式译文', error='')
     app.update_doc(pid, publish)
+    try:
+        cleanup_completed_run(app, pid, run_id)
+    except (OSError, ValueError) as exc:
+        # 译文已经提交；文件占用或核验异常只保留中间文件，不能改成翻译失败。
+        print(f'[job pdf_translate {pid}] 中间文件清理未完成：{type(exc).__name__}', file=sys.stderr, flush=True)
 
 
 def _public_artifact(app, pid, artifact, *, pages=True):
