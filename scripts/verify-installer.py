@@ -68,8 +68,27 @@ def wait_for(check, seconds=45):
 
 
 def digest(path):
+    result = hashlib.sha256()
     with path.open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            result.update(chunk)
+    return result.hexdigest()
+
+
+def verify_installed_inventory(installed):
+    """核对实际落盘文件，捕获安装器误排除依赖资源等 payload 之后的遗漏。"""
+    installed = installed.resolve()
+    manifest = json.loads((installed / 'release-manifest.json').read_text(encoding='utf-8'))
+    files = manifest['files']
+    require(isinstance(files, dict) and bool(files), 'Installed inventory is empty or invalid.')
+    mismatches = []
+    for name, expected in files.items():
+        path = (installed / name).resolve()
+        if (not path.is_relative_to(installed) or not path.is_file()
+                or path.stat().st_size != expected['size'] or digest(path) != expected['sha256']):
+            mismatches.append(name)
+    require(not mismatches, f'Installed inventory differs ({len(mismatches)} files): {mismatches[:20]}')
+    return {'installed_inventory': True, 'file_count': len(files), 'version': manifest['version']}
 
 
 class NativeProcesses:
@@ -245,6 +264,7 @@ def main():
         require(entries and all(Path(x['location']).resolve() == installed for x in entries),
                 'Installer registration does not match the isolated installation.')
         require((installed / 'EzRead.exe').is_file(), 'Installation did not create EzRead.exe.')
+        report['checks'].append(verify_installed_inventory(installed))
 
     def application_cycle(stage):
         session = uuid.uuid4().hex
@@ -324,6 +344,14 @@ def main():
         require(probe['status'] == 'verified' and len(probe['assets']) == 182,
                 'PDF engine probe did not verify all 182 official assets.')
         report['checks'].append({'engine_probe': True, 'asset_count': len(probe['assets']), 'engine_version': probe['version']})
+        # --probe 不执行 PDF 解析。必须使用真实安装运行时完成模拟翻译和产物核验。
+        command([sys.executable, str(ROOT / 'scripts/verify-installed-pdf.py'),
+                 '--app-root', str(installed), '--output', str(run / 'pdf-pipeline')],
+                run / 'pdf-pipeline.log', probe_env, ROOT, timeout=900)
+        pipeline = json.loads((run / 'pdf-pipeline/report.json').read_text(encoding='utf-8'))
+        require(pipeline['status'] == 'passed' and pipeline['real_model_calls'] == 0,
+                'Installed PDF pipeline did not complete offline.')
+        report['checks'].append({'installed_pdf_pipeline': True, 'real_model_calls': 0})
         install('upgrade')
         require(digest(sentinel) == sentinel_hash, 'Upgrade modified user data.')
         application_cycle('upgrade')

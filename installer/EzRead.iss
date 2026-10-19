@@ -46,7 +46,8 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.i
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "data\*,__pycache__\*,*.pyc"
+; 仅排除 payload 根目录的用户数据，依赖内部的 data 模块和资源必须保留。
+Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "\data\*,__pycache__\*,*.pyc"
 Source: "{#WebViewSetup}"; Flags: dontcopy
 
 [Icons]

@@ -69,6 +69,7 @@ function renderNav() {
 function setView(view, collection = "") {
   closeFilterMenu();
   if (view === "queue") { openQueue(); return; }
+  if (typeof readerScrollActive === "function" && readerScrollActive()) return act(async () => { if (await closeReader()) setView(view, collection); });
   if ($("#queue-dialog").open) { queueLibraryScroll = 0; closeDialog("#queue-dialog"); }
   state.view = view; state.collection = collection;
   $("#search").placeholder = view === "all" ? "搜索论文…" : `搜索${collection || VIEW_NAMES[view]}…`;
@@ -76,7 +77,7 @@ function setView(view, collection = "") {
 }
 function toggleView(view, collection = "") {
   const leave = (view === "favorites" || view === "collection") && state.view === view && state.collection === collection;
-  setView(leave ? "all" : view, leave ? "" : collection);
+  return setView(leave ? "all" : view, leave ? "" : collection);
 }
 function openQueue() {
   if (!$("#queue-dialog").open) queueLibraryScroll = window.scrollY;

@@ -31,6 +31,7 @@ if (typeof window !== "undefined" && window.ezreadDesktop && window.chrome?.webv
 // Invoked only by the native window's close handshake. Preserve local drafts
 // first; a network failure may leave a recoverable draft but must not discard it.
 function ezreadPersistDesktopDrafts() {
+  if (typeof readerTabsPersist === "function" && !readerTabsPersist()) return false;
   if (typeof readerScrollActive === "function" && readerScrollActive() && !readerPersistDrafts()) return false;
   if (typeof detailNoteSaves !== "undefined") {
     for (const entry of detailNoteSaves.values()) {

@@ -31,20 +31,6 @@
   background: var(--paper);
   border-bottom: 1px solid var(--line);
 }
-.reader-dialog .reader-back {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-  white-space: nowrap;
-  font-size: 0.88em;
-  color: var(--text);
-  gap: 6px;
-}
-.reader-dialog .reader-back .icon {
-  width: 1.05em;
-  height: 1.05em;
-  transform: rotate(180deg);
-}
 .reader-dialog .reader-title {
   flex: 1;
   overflow: hidden;
@@ -406,13 +392,6 @@
   }
   .reader-dialog .reader-topbar {
     gap: 8px;
-  }
-  .reader-dialog .reader-back {
-    font-size: 0.8em;
-  }
-  .reader-dialog .reader-back .icon {
-    width: 1em;
-    height: 1em;
   }
   .reader-dialog .reader-tools {
     flex-basis: 100%;

@@ -53,7 +53,12 @@ function installEvents() {
   $("#search").addEventListener("focus", () => closeFilterMenu());
   $("#import-top").addEventListener("click", () => { closeFilterMenu(); $("#file-input").click(); });
   $("#file-input").addEventListener("change", event => act(() => importFiles(event.target.files)));
-  $$(".nav-item[data-view]").forEach(node => node.addEventListener("click", () => { if (node.dataset.view === "all") clearFilters(); toggleView(node.dataset.view); if (node.dataset.view === "queue") void refreshStatus().catch(() => {}); }));
+  $$(".nav-item[data-view]").forEach(node => node.addEventListener("click", () => act(async () => {
+    if (node.dataset.view !== "queue" && readerScrollActive() && !await closeReader()) return;
+    if (node.dataset.view === "all") clearFilters();
+    await toggleView(node.dataset.view);
+    if (node.dataset.view === "queue") void refreshStatus().catch(() => {});
+  }, node)));
   $$("[data-filter-type]").forEach(node => node.addEventListener("click", () => {
     $("#filter-type").value = node.dataset.filterType;
     if (node.dataset.filterType !== "journal") { $("#filter-journal").value = ""; $("#filter-tier").value = ""; }
@@ -88,13 +93,18 @@ function installEvents() {
   document.addEventListener("keydown", event => {
     if (event.key !== "Escape" || event.defaultPrevented) return;
     if (activeCardMenuId) { event.preventDefault(); event.stopPropagation(); closeCardMenu(true); }
+    else if (readerScrollActive() && !$("dialog:modal") && !$("[popover=auto]:popover-open")) { event.preventDefault(); void closeReader(); }
     else if (state.selectionMode && !$("dialog[open]") && !activeFilterTrigger && !draggingPaperIds.length) { event.preventDefault(); cancelPaperSelection(); }
   });
   $("#refresh-status").addEventListener("click", event => act(async () => { await refreshStatus(); await loadLibrary(); renderQueue(); toast("已更新任务状态"); }, event.currentTarget));
   $$('[data-close]').forEach(node => node.addEventListener("click", () => closeDialog(`#${node.dataset.close}`)));
   $("#queue-close").addEventListener("click", () => closeDialog("#queue-dialog"));
   $("#queue-dialog").addEventListener("close", () => { renderLibrary(); requestAnimationFrame(() => { if (!$("#queue-dialog").open) window.scrollTo({ top: queueLibraryScroll }); }); });
-  document.addEventListener("keydown", event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); if ($("#queue-dialog").open) closeDialog("#queue-dialog"); $("#search").focus(); $("#search").select(); } });
+  document.addEventListener("keydown", event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); void act(async () => {
+    if (readerScrollActive() && !await closeReader()) return;
+    if ($("#queue-dialog").open) closeDialog("#queue-dialog");
+    $("#search").focus(); $("#search").select();
+  }); } });
   $("#detail-dialog").addEventListener("cancel", event => { event.preventDefault(); closeDialog("#detail-dialog"); });
   $("#reader-dialog").addEventListener("cancel", event => { event.preventDefault(); void closeReader(); });
   let dragDepth = 0;
@@ -115,7 +125,7 @@ async function init() {
   const results = await Promise.allSettled([api("/api/settings"), api("/api/papers")]);
   if (results[0].status === "fulfilled") state.settings = { ...state.settings, ...results[0].value };
   applyPreferences();
-  if (results[1].status === "fulfilled") { state.papers = results[1].value.papers || []; state.collections = list(results[1].value.collections); state.loading = false; renderLibrary(); }
+  if (results[1].status === "fulfilled") { state.papers = results[1].value.papers || []; state.collections = list(results[1].value.collections); state.loading = false; renderLibrary(); await readerTabsRestore(); }
   else {
     state.loading = false; $("#result-count").textContent = "连接未完成"; $("#paper-grid").replaceChildren(el("div", { class: "no-results", style: { columnSpan: "all" } }, el("h3", {}, "暂时无法打开本地文献库"), el("p", { class: "small" }, results[1].reason.message), button("重新连接", () => act(() => loadLibrary(true)), "primary", "", { style: { marginTop: "17px" } }))); toast("请确认 EzRead 本地服务正在运行", "error", 7000);
   }

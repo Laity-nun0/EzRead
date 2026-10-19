@@ -65,7 +65,7 @@ const report = { status: 'running', syntheticOnly: true, errors: [], consoleErro
     await page.evaluate(() => { document.getElementById('original-scroll').scrollTop = 0; document.getElementById('translation-scroll').scrollTop = 0; });
     await page.waitForTimeout(200);
     await capture('reader.png');
-    await page.locator('.reader-back').click();
+    await page.locator('.workspace > .reader-tabs .reader-tab-library').click();
     await page.locator('#settings-button').click();
     await page.getByRole('tab', { name: '期刊等级', exact: true }).click();
     await page.waitForSelector('.journal-catalogue-row');

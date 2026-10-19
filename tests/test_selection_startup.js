@@ -3,11 +3,12 @@ const assert = require("node:assert/strict"), fs = require("node:fs"), path = re
 let source = fs.readFileSync(path.join(__dirname, "../static/app.js"), "utf8");
 source = source.slice(0, source.lastIndexOf("init().catch("));
 function fixture() {
-  const calls = [], rendered = [], nodes = new Map();
+  const calls = [], rendered = [], nodes = new Map(), restored = [];
   const context = vm.createContext({
     state: { settings: {}, loading: true }, DEFAULT_PREFERENCES: {},
     readBrowserSetting: () => null, applyPreferences() {}, loadUsage() { throw Error("Unexpected automatic usage lookup"); }, loadModels: async () => { throw Error("Unexpected automatic model lookup"); },
     renderLibrary() { rendered.push(context.state.loading); }, list: value => value || [], toast() {},
+    readerTabsRestore: async () => { restored.push({ loading: context.state.loading, papers: context.state.papers }); },
     renderUsagePanels() {}, refreshStatus() { calls.push({ url: "/api/ai/status" }); return Promise.resolve({}); },
     $: selector => { if (!nodes.has(selector)) nodes.set(selector, { open: false, replaceChildren() {} }); return nodes.get(selector); },
     setInterval: () => 1,
@@ -19,7 +20,7 @@ function fixture() {
   });
   vm.runInContext(source, context);
   vm.runInContext("installEvents = () => {}", context);
-  return { context, calls, rendered };
+  return { context, calls, rendered, restored };
 }
 (async () => {
   const test = fixture();
@@ -30,6 +31,9 @@ function fixture() {
   assert.equal(completed, true, "Local library startup must complete without a model connection");
   assert.equal(test.context.state.loading, false);
   assert.ok(test.rendered.includes(false));
+  assert.equal(test.restored.length, 1, "启动应在文献列表就绪后恢复标签会话");
+  assert.equal(test.restored[0].loading, false);
+  assert.equal(test.restored[0].papers.length, 0);
   assert.deepEqual(test.calls.map(call => call.url).sort(), ["/api/ai/status", "/api/papers", "/api/settings"]);
   console.log("Startup: local API status/settings/library load without selection warmup or automatic CLI queries.");
 })().catch(error => { console.error(error); process.exitCode = 1; });

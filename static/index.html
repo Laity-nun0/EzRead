@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/static/redesign.css">
   <link rel="stylesheet" href="/static/surfaces.css?v=20261018-theme-fix">
   <script src="/static/reader.js" defer></script>
+  <script src="/static/reader-tabs.js" defer></script>
   <script src="/static/reader-pdf.js" defer></script>
   <script src="/static/reader-layout.js" defer></script>
   <script src="/static/paper-chat-markdown.js" defer></script>
@@ -83,13 +84,11 @@
       </div>
       <div class="sidebar-bottom">
         <button class="nav-item" data-view="queue" aria-haspopup="dialog" aria-controls="queue-dialog" aria-expanded="false"><svg class="icon"><use href="#i-translate"/></svg>翻译任务<span id="queue-count" class="nav-count hidden">0</span></button>
-        <div class="sidebar-utilities">
-          <button type="button" id="theme-toggle" class="icon-button" aria-label="切换到夜间主题"><svg class="icon"><use href="#i-moon"/></svg></button>
-          <button class="nav-item" id="settings-button"><svg class="icon"><use href="#i-settings"/></svg>设置</button>
-        </div>
+        <button class="nav-item" id="settings-button"><svg class="icon"><use href="#i-settings"/></svg>设置</button>
       </div>
     </aside>
     <main class="workspace">
+      <nav class="reader-tabs" aria-label="文献标签"><button type="button" id="theme-toggle" class="icon-button" aria-label="切换到夜间主题"><svg class="icon"><use href="#i-moon"/></svg></button><div class="reader-tab-content"></div></nav>
       <section class="library-view" id="library-view" aria-label="全部论文">
         <header class="library-header">
           <h1>文献库</h1>
@@ -120,6 +119,7 @@
         <div id="empty-state" class="empty-state hidden"><div class="empty-illustration"><div class="empty-paper back"></div><div class="empty-paper front"><svg class="icon"><use href="#i-image"/></svg><i></i><i></i></div><span>+</span></div><h2>文献库为空</h2></div>
         <footer class="library-footer" aria-label="期刊等级颜色图例"><div class="if-legend" id="if-legend"></div></footer>
       </section>
+      <dialog id="reader-dialog" class="reader-dialog" aria-label="文献阅读器"><div id="reader-content"></div></dialog>
     </main>
   </div>
   <dialog id="queue-dialog" class="queue-dialog" aria-labelledby="queue-dialog-title">
@@ -135,7 +135,6 @@
   <div class="drop-overlay hidden" id="drop-overlay"><div><svg class="icon"><use href="#i-upload"/></svg><h2>松开鼠标导入 PDF</h2></div></div>
   <div class="import-progress hidden" id="import-progress"><span class="spinner"></span><div><strong id="import-progress-title">正在导入论文</strong></div></div>
   <dialog id="detail-dialog" class="detail-dialog"><div id="detail-scroll" class="detail-scroll"><div id="detail-content"></div></div></dialog>
-  <dialog id="reader-dialog" class="reader-dialog"><div id="reader-content"></div></dialog>
   <dialog id="edit-dialog" class="form-dialog" aria-labelledby="metadata-dialog-title"><div id="edit-content"></div></dialog>
   <dialog id="crop-dialog" class="crop-dialog"><div id="crop-content"></div></dialog>
   <dialog id="settings-dialog" class="form-dialog"><div id="settings-content"></div></dialog>

@@ -8,8 +8,12 @@ Windows 10/11 x64 安装版。由 Laity-nun0 基于 [原项目 EzRead](https://g
 - 替换 README 的旧界面图片，使用当前界面和完全合成的演示文献，补充[二次开发说明](https://github.com/Laity-nun0/EzRead/blob/main/docs/DERIVATION.md)。
 - 3.5.4 补齐 Windows 暂存目录的显式权限重置，确保不同 Python 环境下都先移除额外权限，再复制私有资料。
 
-下载安装文件 `EzRead-3.5.4-Setup-x64.exe`。缺少 WebView2 的电脑首次安装需要联网；AI 功能需配置自己的 API Key，本地阅读无需密钥。安装程序未进行商业代码签名。
+- 3.5.5 修复安装器误排除依赖内部 `data` 目录导致的 PDF 引擎中断，保留解析模块、CMap 与第三方许可；安装验收增加完整文件摘要核对和实际 PDF 引擎的离线模拟翻译。
+- 新增文献标签多开、关闭重开恢复阅读会话，以及进行中翻译任务的退出提醒；阅读时保留侧栏与同一顶部导航，主题按钮位于文献库左侧，翻译任务与设置上下排列。
+- 卡片与内容区左侧对齐，切换标签保留当前内容直至目标加载完成；统一标签选中与悬停时的圆角及颜色。
+
+下载安装文件 `EzRead-3.5.5-Setup-x64.exe`。缺少 WebView2 的电脑首次安装需要联网；AI 功能需配置自己的 API Key，本地阅读无需密钥。安装程序未进行商业代码签名。
 
 本版本按用户选定的当前 UI 单独发布，未整合上游另外开发的 PDF 校订和对话扩展。
 
-`SHA256SUMS.txt` 为下载校验清单，`release-manifest.json` 为安装内容清单。安装目录提供第三方许可和 BabelDOC/PyMuPDF/MuPDF 对应源码；`EzRead-3.5.4-source.zip` 包含本版本源码与重建脚本。
+`SHA256SUMS.txt` 为下载校验清单，`release-manifest.json` 为安装内容清单。安装目录提供第三方许可和 BabelDOC/PyMuPDF/MuPDF 对应源码；`EzRead-3.5.5-source.zip` 包含本版本源码与重建脚本。

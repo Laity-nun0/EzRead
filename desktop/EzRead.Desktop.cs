@@ -315,7 +315,7 @@ internal static class NativeTaskbar
 internal sealed class OwnedBackend : IDisposable
 {
     private readonly ShellOptions options;
-    private readonly JavaScriptSerializer json = new JavaScriptSerializer();
+    private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
     private Process process;
     private string instance;
     private bool attached;
@@ -360,6 +360,27 @@ internal sealed class OwnedBackend : IDisposable
         lock (gate) {
             Request("/api/desktop-attach", json.Serialize(new { instance_id = instance, process_id = Process.GetCurrentProcess().Id }));
             attached = true;
+        }
+    }
+    public bool HasTranslationWork() {
+        lock (gate) {
+            // Failed startup has not taken ownership of the existing service.
+            if (!attached || process != null && process.HasExited) return false;
+            var snapshot = Request("/api/papers");
+            object papers;
+            if (!snapshot.TryGetValue("papers", out papers) || !(papers is System.Collections.IList))
+                throw new InvalidOperationException("无法读取翻译任务状态。");
+            foreach (var value in (System.Collections.IList)papers) {
+                var paper = value as Dictionary<string, object>;
+                if (paper == null) throw new InvalidOperationException("翻译任务状态无效。");
+                foreach (var name in new[] { "translation", "pdf_layout_translation" }) {
+                    object task, status;
+                    var state = paper.TryGetValue(name, out task) ? task as Dictionary<string, object> : null;
+                    if (state != null && state.TryGetValue("status", out status) &&
+                        (Object.Equals(status, "running") || Object.Equals(status, "queued"))) return true;
+                }
+            }
+            return false;
         }
     }
     public void Stop() {
@@ -824,6 +845,20 @@ internal sealed class ReaderWindow : Form
             if (closeAfter && !IsDisposed) Close();
         });
     }
+    private Task<bool> ConfirmTranslationClose() {
+        var answer = new TaskCompletionSource<bool>();
+        // A close can originate in a WebView2 callback (for example migration).
+        // Post the modal loop only after that callback has returned.
+        BeginInvoke((Action)delegate {
+            if (IsDisposed || Disposing) { answer.TrySetResult(false); return; }
+            Log("close-translation-confirmation");
+            var result = MessageBox.Show(this,
+                "仍有翻译任务正在进行或等待执行。退出将暂停这些任务，已完成的翻译会保留，重新打开后可继续。\n\n是否暂停翻译并退出？选择“否”可继续使用。",
+                "暂停翻译并退出", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
+            answer.TrySetResult(result == DialogResult.Yes);
+        });
+        return answer.Task;
+    }
     private void OpenExternal(string url) {
         Uri target;
         if (!Uri.TryCreate(url, UriKind.Absolute, out target) || (target.Scheme != "http" && target.Scheme != "https") || !String.IsNullOrEmpty(target.UserInfo)) return;
@@ -917,6 +952,27 @@ internal sealed class ReaderWindow : Form
         try {
             Exception closeError = null;
             try {
+                if (backend != null) {
+                    bool translating = false;
+                    Exception checkFailure = null;
+                    try { translating = await Task.Run((Func<bool>)backend.HasTranslationWork); }
+                    catch (Exception exc) { checkFailure = exc; }
+                    if (checkFailure != null) {
+                        Log("close-translation-check: " + checkFailure.GetType().Name);
+                        await CancelLibraryMigration();
+                        preparingClose = false;
+                        ShowWarning("无法确认翻译任务状态，窗口暂未关闭。请稍后重试。", MessageBoxIcon.Warning);
+                        return;
+                    }
+                    if (translating) {
+                        if (!await ConfirmTranslationClose()) {
+                            Log("close-translation-cancelled");
+                            await CancelLibraryMigration();
+                            return;
+                        }
+                        Log("close-translation-confirmed");
+                    }
+                }
                 SaveBounds();
                 // Keep the WebView alive for its save acknowledgement, but remove
                 // native windows immediately. Backend cleanup finishes while hidden.
@@ -1051,7 +1107,7 @@ internal sealed class ReaderWindow : Form
     }
     private async Task<object> SmokeLayout(string label) {
         string cardBox = await view.CoreWebView2.ExecuteScriptAsync("JSON.stringify((()=>{const n=document.querySelector('.paper-card'),s=getComputedStyle(n),covers=[...document.querySelectorAll('.card-cover img')];return{borderTop:parseFloat(s.borderTopWidth),borderBottom:parseFloat(s.borderBottomWidth),paddingTop:parseFloat(s.paddingTop),paddingBottom:parseFloat(s.paddingBottom),height:n.getBoundingClientRect().height,bodyHeight:n.querySelector('.card-body').getBoundingClientRect().height,contentHeight:n.querySelector('.card-content').getBoundingClientRect().height,pixelRatio:devicePixelRatio,coverCount:covers.length,loadedCovers:covers.filter(n=>n.complete&&n.naturalWidth>0).length,coverRatios:[...new Set(covers.map(n=>n.naturalWidth+'/'+n.naturalHeight))],coversBeforeText:[...document.querySelectorAll('.paper-card')].every(c=>c.querySelector('.card-cover').getBoundingClientRect().bottom<=c.querySelector('.card-body').getBoundingClientRect().top+1),titlesFit:[...document.querySelectorAll('.card-title')].every(t=>t.scrollHeight<=t.clientHeight+1),recentVisible:!document.querySelector('#recent-reading').classList.contains('hidden'),themeButtons:document.querySelectorAll('#theme-toggle').length};})())");
-        string layout = await view.CoreWebView2.ExecuteScriptAsync("JSON.stringify({viewport:document.body.clientWidth,height:innerHeight,innerWidth:innerWidth,documentWidth:document.documentElement.scrollWidth,overflowX:getComputedStyle(document.documentElement).overflowX,tracks:getComputedStyle(document.querySelector('#paper-grid')).gridTemplateColumns.split(/\\s+/).map(parseFloat),grid:document.querySelector('#paper-grid').getBoundingClientRect().toJSON(),container:document.querySelector('#library-view').getBoundingClientRect().toJSON(),sidebar:document.querySelector('.sidebar').getBoundingClientRect().width,footer:document.querySelector('.library-footer').getBoundingClientRect().toJSON(),dialog:[...document.querySelectorAll('dialog[open]')].map(n=>({id:n.id,...n.getBoundingClientRect().toJSON()})),cards:[...document.querySelectorAll('.paper-card')].map(n=>({id:n.dataset.paperId,x:n.offsetLeft,y:n.offsetTop,width:n.offsetWidth,height:n.offsetHeight,title:n.querySelector('.card-title').textContent}))})");
+        string layout = await view.CoreWebView2.ExecuteScriptAsync("JSON.stringify({viewport:document.body.clientWidth,height:innerHeight,innerWidth:innerWidth,documentWidth:document.documentElement.scrollWidth,overflowX:getComputedStyle(document.documentElement).overflowX,tracks:getComputedStyle(document.querySelector('#paper-grid')).gridTemplateColumns.split(/\\s+/).map(parseFloat),grid:document.querySelector('#paper-grid').getBoundingClientRect().toJSON(),container:{...document.querySelector('#library-view').getBoundingClientRect().toJSON(),paddingLeft:parseFloat(getComputedStyle(document.querySelector('#library-view')).paddingLeft)},sidebar:document.querySelector('.sidebar').getBoundingClientRect().width,footer:document.querySelector('.library-footer').getBoundingClientRect().toJSON(),dialog:[...document.querySelectorAll('dialog[open]')].map(n=>({id:n.id,...n.getBoundingClientRect().toJSON()})),cards:[...document.querySelectorAll('.paper-card')].map(n=>({id:n.dataset.paperId,x:n.offsetLeft,y:n.offsetTop,width:n.offsetWidth,height:n.offsetHeight,title:n.querySelector('.card-title').textContent}))})");
         using (var preview = new MemoryStream()) {
             await view.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, preview);
             preview.Position = 0;

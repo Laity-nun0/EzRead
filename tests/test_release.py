@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -14,9 +15,37 @@ SPEC = importlib.util.spec_from_file_location('build_release', Path(__file__).re
                                               / 'scripts/build-release.py')
 release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
+INSTALL_SPEC = importlib.util.spec_from_file_location('verify_installer', release.ROOT / 'scripts/verify-installer.py')
+installer_verification = importlib.util.module_from_spec(INSTALL_SPEC)
+INSTALL_SPEC.loader.exec_module(installer_verification)
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_installer_excludes_only_root_library_not_dependency_data(self):
+        script = (release.ROOT / 'installer/EzRead.iss').read_text(encoding='utf-8')
+        exclusions = re.findall(r'Excludes:\s*"([^"]+)"', script)
+        self.assertEqual(len(exclusions), 1)
+        self.assertIn(r'\data\*', exclusions[0].split(','))
+        self.assertNotIn(r'data\*', exclusions[0].split(','))
+
+    def test_installed_inventory_detects_missing_dependency_data_and_changed_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            name = '.deps/babeldoc/runtime/Lib/site-packages/parser/data/glyphlist.py'
+            content = b'PUBLIC = True\n'
+            manifest = {'version': 'test', 'files': {name: {'size': len(content),
+                        'sha256': hashlib.sha256(content).hexdigest()}}}
+            (root / 'release-manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            with self.assertRaisesRegex(AssertionError, 'Installed inventory differs'):
+                installer_verification.verify_installed_inventory(root)
+            path = root / name
+            path.parent.mkdir(parents=True)
+            path.write_bytes(content)
+            self.assertEqual(installer_verification.verify_installed_inventory(root)['file_count'], 1)
+            path.write_bytes(b'wrong content\n')
+            with self.assertRaisesRegex(AssertionError, 'Installed inventory differs'):
+                installer_verification.verify_installed_inventory(root)
+
     def test_paths_and_source_allowlist(self):
         for name in ('../private', '/private', 'C:/private', 'C:private', '\\\\host\\share',
                      'normal/../../private', 'private:stream'):

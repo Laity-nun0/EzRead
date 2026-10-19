@@ -37,6 +37,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1
 
 发布前将当前提交的 `git archive` 源码归档放入 `work/release/sources/`，再构建 payload。`release-manifest.json` 记录包版本和逐文件 SHA-256，`output/releases/` 保存安装器及最终摘要。源码发布与二进制发布分别审计：文献数据、私有配置、截图和凭据不进入提交或安装包；保留第三方源码与许可，详见根目录 `THIRD-PARTY-NOTICES.md`。
 
-安装验收使用独立目录、临时库与 `--verification-session <新 UUID>`，检查安装、主入口启动、本地健康接口身份、PDF 资源、关闭保存、升级与卸载后数据保留。普通回归不发送真实模型请求。
+安装验收使用独立目录、临时库与 `--verification-session <新 UUID>`，检查安装、主入口启动、本地健康接口身份、全部发布文件摘要、PDF 资源、关闭保存、升级与卸载后数据保留。安装后还必须通过实际内置 Python、BabelDOC 与任务队列完成离线模拟翻译，核对单语／双语 PDF 及笔记、阅读状态保留；`--probe` 不能代替该流程。普通回归不发送真实模型请求。
+
+已安装程序的完整 PDF 流程可单独验证：`python scripts/verify-installed-pdf.py --app-root <安装目录> --output work/installed-pdf-check`。输出必须是新的独立目录，不读取已安装应用的真实文献库或 API 配置；可通过 `--source <PDF路径>` 增加只读副本样本。模拟结果只证明引擎流程可运行，不证明中文译文质量。
 
 数据目录功能另以 `.\.venv\Scripts\python.exe scripts/verify-migration.py --payload work/release/payload --executable work/desktop-build/EzRead.Desktop.exe` 验证真实 helper、独立 WebView2、并发重开、浏览器草稿、自动切换后的健康接口与正常退出。该入口创建独立应用副本和合成库，证据保存在 `work/migration-verification/`，不迁移个人库。

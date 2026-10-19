@@ -46,10 +46,11 @@ const edge = process.env.EZREAD_BROWSER || path.join(process.env['PROGRAMFILES(X
         const rect = node => { const r = node.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height }; };
         const cards = [...document.querySelectorAll('.paper-card')].map(card => ({ card: rect(card), cover: rect(card.querySelector('.card-cover')), body: rect(card.querySelector('.card-body')), title: rect(card.querySelector('.card-title')), titleOverflow: card.querySelector('.card-title').scrollHeight > card.querySelector('.card-title').clientHeight + 1 }));
         const view = document.querySelector('#library-view');
-        return { cards, columns: new Set(cards.map(item => Math.round(item.card.left))).size, horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1, outerScroll: document.scrollingElement.scrollHeight > innerHeight + 1, scrollHeight: view.scrollHeight, clientHeight: view.clientHeight };
+        return { cards, contentLeft: rect(view).left + parseFloat(getComputedStyle(view).paddingLeft), columns: new Set(cards.map(item => Math.round(item.card.left))).size, horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1, outerScroll: document.scrollingElement.scrollHeight > innerHeight + 1, scrollHeight: view.scrollHeight, clientHeight: view.clientHeight };
       });
       report.layouts.push({ viewport, ...layout });
       assert.ok(layout.columns >= 2 && layout.columns <= 5);
+      assert.ok(Math.abs(layout.cards[0].card.left - layout.contentLeft) <= 1, '卡片应与文献库内容区左侧对齐');
       if (viewport.width === 1440 && !viewport.font) assert.equal(layout.columns, 4, '1440px 文献库应容纳四列卡片，包括滚动条占位');
       if (viewport.width === 960) assert.equal(layout.columns, 2, '窄窗口保留两列完整卡片');
       assert.equal(layout.horizontalOverflow, false, '文献库不能产生页面横向滚动');
@@ -139,12 +140,12 @@ const edge = process.env.EZREAD_BROWSER || path.join(process.env['PROGRAMFILES(X
     await page.waitForFunction(() => state.readerPage === 4);
     assert.equal(await page.locator('#reader-page-input').inputValue(), '4');
     await page.waitForFunction(() => [...document.querySelectorAll('#original-scroll canvas')].some(canvas => canvas.width > 0 && canvas.height > 0));
-    await page.locator('.reader-back').click();
+    await page.locator('.workspace > .reader-tabs .reader-tab-library').click();
     await page.waitForSelector('#reader-dialog[open]', { state: 'hidden' });
     await page.locator('.recent-resume').click();
     await page.waitForSelector('#reader-dialog[open]');
     await page.waitForFunction(() => state.readerPage === 4);
-    await page.locator('.reader-back').click();
+    await page.locator('.workspace > .reader-tabs .reader-tab-library').click();
     await page.waitForSelector('#reader-dialog[open]', { state: 'hidden' });
     const fixture = await (await page.request.get(origin + '/__test/library-state')).json();
     assert.deepEqual(fixture.forbiddenCalls, []);

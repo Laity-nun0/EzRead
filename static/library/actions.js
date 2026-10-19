@@ -3,6 +3,7 @@ async function loadLibrary(showLoading = false) {
   const data = await api("/api/papers");
   state.papers = data.papers || []; state.collections = list(data.collections).map(c => typeof c === "object" ? c.name : c).filter(Boolean); state.loading = false;
   renderLibrary(); if ($("#queue-dialog").open) renderQueue();
+  if (typeof readerTabsRestore === "function") await readerTabsRestore();
 }
 function allCollections() { return [...new Set([...state.collections, ...list(state.settings.collections), ...state.papers.map(p => p.collection).filter(Boolean)])].sort((a, b) => String(a).localeCompare(String(b), "zh-CN")); }
 async function movePapers(ids, collection) {
@@ -25,6 +26,7 @@ async function permanentlyDeletePaper(id) {
   clearDeletedPaperState(id);
 }
 function clearDeletedPaperState(id) {
+  if (typeof readerTabsDeleted === "function") readerTabsDeleted(id);
   if (typeof detailNoteSaves !== "undefined") {
     const entry = detailNoteSaves.get(id);
     if (entry) { entry.released = true; clearTimeout(entry.timer); detailNoteSaves.delete(id); }

@@ -161,6 +161,24 @@ async function main() {
   context.setReaderPage(3);
   assert.equal(cancelledFrame, 77, "Explicit page navigation cancels a pending layout-anchor restore.");
   assert.equal(R.layoutFrame, 0);
+  let resizeNotification, resizeDraws = 0, frameId = 100;
+  const resizeFrames = new Map();
+  context.ResizeObserver = class { constructor(callback) { resizeNotification = callback; } observe() {} disconnect() {} };
+  context.requestAnimationFrame = callback => { resizeFrames.set(++frameId, callback); return frameId; };
+  context.cancelAnimationFrame = id => resizeFrames.delete(id);
+  original.addEventListener = translated.addEventListener = () => {};
+  original.isConnected = true; dialog.open = true;
+  context.drawOriginalPage = () => { resizeDraws++; };
+  context.readerApplyLayout = () => {};
+  context.readerBindScrolling(); original.clientWidth += 100;
+  resizeNotification(); resizeNotification();
+  assert.equal(resizeDraws, 0, "尺寸观察回调不得同步改写页面布局");
+  assert.equal(resizeFrames.size, 1, "同一帧的多次尺寸通知应合并");
+  resizeFrames.get(R.resizeFrame)(); resizeFrames.clear();
+  assert.equal(resizeDraws, 1, "下一帧应更新 PDF 和阅读锚点");
+  resizeNotification(); context.readerDispose();
+  assert.equal(resizeFrames.size, 0, "关闭或切换文献必须取消旧尺寸回调");
+  assert.equal(R.resizeFrame, 0);
   assert.deepEqual([...storage.entries()].filter(([key]) => /block:|text-action:/.test(key)), legacyDrafts);
   console.log("Reader behavior checks passed: anchors, offset persistence, offline drafts, concurrent notes, safe close, keyboard split, Ctrl+wheel PDF/text zoom.");
 }

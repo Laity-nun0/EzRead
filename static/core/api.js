@@ -92,5 +92,5 @@ async function patchPaper(id, patch) {
   const data = await api(`/api/papers/${encodeURIComponent(id)}`, { method: "PATCH", body: patch });
   updatePaper({ id, ...patch, ...(data.paper || (data.id ? data : {})) }); renderLibrary(); return data;
 }
-function openDialog(id) { const d = $(id); if (!d.open) { d.showModal(); syncToastLayer(); } }
+function openDialog(id) { const d = $(id); if (!d.open) { if (id === "#reader-dialog") d.show(); else d.showModal(); syncToastLayer(); } }
 function closeDialog(id) { if (id === "#reader-dialog") return closeReader(); if (id === "#detail-dialog") return act(async () => { await flushDetailNotes(); $(id).close(); }); $(id).close(); }

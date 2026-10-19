@@ -3,8 +3,8 @@
 // This script is loaded before app.js. Shared app state is only read inside functions.
 const readerRuntime = {
   imageObserver: null, thumbObserver: null, resizeObserver: null,
-  leftFrame: 0, rightFrame: 0, suppressLeftUntil: 0, suppressRightUntil: 0,
-  opening: 0, request: 0, mountedId: null, boundDialog: null,
+  leftFrame: 0, rightFrame: 0, resizeFrame: 0, suppressLeftUntil: 0, suppressRightUntil: 0,
+  opening: 0, openingId: null, request: 0, mountedId: null, boundDialog: null,
   originalSignature: "", resizeAnchor: null, translationAnchor: null,
   thumbsOpen: false, split: .5, position: null,
   savedSignature: "", savePromise: null, closePromise: null,
@@ -154,31 +154,48 @@ function readerTranslationPage(page) {
 }
 
 async function openReader(id) {
-  if (readerScrollActive() && !(await closeReader())) return;
-  if (typeof flushDetailNotes === "function") await flushDetailNotes(id);
   const opening = ++readerRuntime.opening;
-  const p = normalizeDetail(await api(`/api/papers/${encodeURIComponent(id)}`));
-  if (opening !== readerRuntime.opening) return;
-  readerRuntime.libraryAnchor = readerRememberLibrary();
-  const detail = $("#detail-dialog"); if (detail?.open) detail.close();
-  state.reader = p;
-  const cached = readerReadLocal("position", id);
-  const position = readerNormalizePosition(cached?.pending ? cached.position : p.reader_state || cached?.position, p);
-  readerRuntime.position = position; readerRuntime.split = position.split_ratio;
-  state.readerPage = position.page; state.selectedBlock = null; state.zoom = position.zoom;
-  readerRuntime.thumbsOpen = false; readerRuntime.savedSignature = "";
-  const display = readerReadLocal("display", id);
-  readerRuntime.chromeCollapsed = display?.collapsed === true;
-  if (typeof readerPdfLayoutReset === "function") readerPdfLayoutReset(p);
-  const notesDraft = readerReadLocal("notes", id);
-  readerRuntime.notes = { id, value: typeof notesDraft?.value === "string" ? notesDraft.value : p.notes || "", savedValue: p.notes || "", timer: null, saving: null, storageOk: true };
-  renderReader(); openDialog("#reader-dialog");
-  requestAnimationFrame(() => {
-    if (state.reader?.id !== id || !readerScrollActive()) return;
-    readerRestorePosition(position);
-    if (notesDraft?.value !== undefined && notesDraft.value !== p.notes) toggleReaderNotes(true);
-    readerQueuePositionSave();
-  });
+  readerRuntime.openingId = id;
+  if (readerRuntime.closePromise) await readerRuntime.closePromise;
+  if (opening !== readerRuntime.opening) return false;
+  if (readerScrollActive() && state.reader.id === id) { readerRuntime.openingId = null; $("#reader-content").inert = false; return true; }
+  const switching = readerScrollActive();
+  if (switching && !(await closeReader(true))) return false;
+  if (opening !== readerRuntime.opening) return false;
+  const content = $("#reader-content");
+  // 保留旧画面等待目标时暂缓编辑，避免保存后新增笔记在替换时丢失。
+  if (switching) content.inert = true;
+  try {
+    if (typeof flushDetailNotes === "function") await flushDetailNotes(id);
+    if (opening !== readerRuntime.opening) return false;
+    const p = normalizeDetail(await api(`/api/papers/${encodeURIComponent(id)}`));
+    if (opening !== readerRuntime.opening) return false;
+    if (!switching) readerRuntime.libraryAnchor = readerRememberLibrary();
+    const detail = $("#detail-dialog"); if (detail?.open) detail.close();
+    state.reader = p;
+    const cached = readerReadLocal("position", id);
+    const position = readerNormalizePosition(cached?.pending ? cached.position : p.reader_state || cached?.position, p);
+    readerRuntime.position = position; readerRuntime.split = position.split_ratio;
+    state.readerPage = position.page; state.selectedBlock = null; state.zoom = position.zoom;
+    readerRuntime.thumbsOpen = false; readerRuntime.savedSignature = "";
+    const display = readerReadLocal("display", id);
+    readerRuntime.chromeCollapsed = display?.collapsed === true;
+    if (typeof readerPdfLayoutReset === "function") readerPdfLayoutReset(p);
+    const notesDraft = readerReadLocal("notes", id);
+    readerRuntime.notes = { id, value: typeof notesDraft?.value === "string" ? notesDraft.value : p.notes || "", savedValue: p.notes || "", timer: null, saving: null, storageOk: true };
+    renderReader(); openDialog("#reader-dialog");
+    if (typeof readerTabsOpened === "function") readerTabsOpened(id);
+    readerRuntime.openingId = null;
+    requestAnimationFrame(() => {
+      if (state.reader?.id !== id || !readerScrollActive()) return;
+      readerRestorePosition(position);
+      if (notesDraft?.value !== undefined && notesDraft.value !== p.notes) toggleReaderNotes(true);
+      readerQueuePositionSave();
+    });
+    return true;
+  } finally {
+    if (opening === readerRuntime.opening) content.inert = false;
+  }
 }
 
 function readerDispose() {
@@ -187,6 +204,7 @@ function readerDispose() {
   readerRuntime.imageObserver = null; readerRuntime.thumbObserver = null; readerRuntime.resizeObserver = null;
   cancelAnimationFrame(readerRuntime.leftFrame); cancelAnimationFrame(readerRuntime.rightFrame);
   readerRuntime.leftFrame = 0; readerRuntime.rightFrame = 0;
+  cancelAnimationFrame(readerRuntime.resizeFrame); readerRuntime.resizeFrame = 0;
   cancelAnimationFrame(readerRuntime.layoutFrame); clearTimeout(readSaveTimer);
 }
 function renderReader() {
@@ -224,7 +242,7 @@ function renderReader() {
   const originalLink = safeUrl(p.original_url || `/media/${p.id}/original.pdf`);
   const divider = el("div", { class: "reader-divider", id: "reader-divider", role: "separator", tabindex: "0", "aria-label": "调整原文与译文比例", "aria-orientation": "vertical", "aria-valuemin": "30", "aria-valuemax": "70", "aria-controls": "original-scroll translation-scroll", title: "拖动调整比例；方向键微调，Enter 恢复均分" }, el("span", { "aria-hidden": "true" }));
   $("#reader-content").replaceChildren(
-    el("div", { class: "reader-topbar" }, el("button", { class: "reader-back", onclick: () => void closeReader(), title: "返回文献库" }, icon("chevron"), "文献库"), el("div", { class: "reader-title", title: titleOf(p) }, titleOf(p)), tools),
+    el("div", { class: "reader-topbar" }, el("div", { class: "reader-title", title: titleOf(p) }, titleOf(p)), tools),
     el("div", { class: "reader-viewbar" },
       button("折叠工具栏", () => readerSetDisplay({ collapsed: true }), "secondary")),
     el("div", { class: "reader-workspace" }, el("div", { class: "reader-layout", id: "reader-layout" }, original, divider, trans), el("aside", { class: "reader-notes", id: "reader-notes", hidden: true, "aria-label": "论文笔记" }), el("aside", { class: "reader-paper-chat", id: "reader-paper-chat", hidden: true, "aria-label": "本篇论文对话" })),
@@ -235,12 +253,20 @@ function renderReader() {
   readerSyncTextZoom();
   const dialog = $("#reader-dialog");
   if (readerRuntime.boundDialog !== dialog) {
-    dialog.addEventListener("close", () => { readerPersistDrafts(); readerDispose(); readerRestoreLibrary(); }); readerRuntime.boundDialog = dialog;
+    dialog.addEventListener("close", () => { if (!dialog.open) readerRestoreLibrary(); }); readerRuntime.boundDialog = dialog;
   }
 }
-async function closeReader() {
-  if (readerRuntime.closePromise) return readerRuntime.closePromise;
-  if (!readerScrollActive()) return true;
+async function closeReader(switching = false) {
+  if (!switching) { ++readerRuntime.opening; readerRuntime.openingId = null; }
+  if (readerRuntime.closePromise) {
+    const closed = await readerRuntime.closePromise;
+    if (closed && !switching) readerCloseView();
+    return closed;
+  }
+  if (!readerScrollActive()) {
+    if (typeof readerTabsLibrary === "function") readerTabsLibrary();
+    return true;
+  }
   readerCachePosition(); readerPersistDrafts();
   const content = $("#reader-content"); content.inert = true;
   readerRuntime.closePromise = (async () => {
@@ -250,9 +276,16 @@ async function closeReader() {
     const preserved = readerPersistDrafts();
     if (failed && !preserved) { toast("保存失败，草稿也未能写入本机；请保留此窗口并重试。", "error", 8000); return false; }
     if (failed) toast("未保存内容已保留为本机草稿，请重新打开后核对。", "warn", 6500);
-    $("#reader-dialog").close(); return true;
+    // 标签切换只保存，不关闭外层窗口；目标加载完成后再原位替换内容。
+    if (!switching) readerCloseView();
+    return true;
   })().finally(() => { content.inert = false; readerRuntime.closePromise = null; });
   return readerRuntime.closePromise;
+}
+function readerCloseView() {
+  readerDispose();
+  $("#reader-dialog").close();
+  if (typeof readerTabsLibrary === "function") readerTabsLibrary();
 }
 
 function readerApplyLayout() {
@@ -550,13 +583,17 @@ function readerBindScrolling() {
   if (typeof ResizeObserver === "function") {
     let width = original.clientWidth;
     readerRuntime.resizeObserver = new ResizeObserver(() => {
-      if (Math.abs(original.clientWidth - width) < 1 || !readerScrollActive()) return;
-      if (!original.clientWidth) return;
-      const anchor = readerRuntime.resizeAnchor, translationAnchor = readerRuntime.translationAnchor; width = original.clientWidth;
-      drawOriginalPage(); readerRestoreAnchor(original, ".reader-page-section", anchor);
-      if (typeof readerPdfLayoutResize === "function") readerPdfLayoutResize();
-      readerRestoreAnchor(translated, readerRightAnchorSelector(), translationAnchor);
-      readerApplyLayout();
+      if (readerRuntime.resizeFrame) return;
+      // 尺寸通知中不直接改写被观察的布局，避免 WebView2 重复通知和重排。
+      readerRuntime.resizeFrame = requestAnimationFrame(() => {
+        readerRuntime.resizeFrame = 0;
+        if (!original.isConnected || Math.abs(original.clientWidth - width) < 1 || !readerScrollActive() || !original.clientWidth) return;
+        const anchor = readerRuntime.resizeAnchor, translationAnchor = readerRuntime.translationAnchor; width = original.clientWidth;
+        drawOriginalPage(); readerRestoreAnchor(original, ".reader-page-section", anchor);
+        if (typeof readerPdfLayoutResize === "function") readerPdfLayoutResize();
+        readerRestoreAnchor(translated, readerRightAnchorSelector(), translationAnchor);
+        readerApplyLayout();
+      });
     });
     readerRuntime.resizeObserver.observe(original);
   }

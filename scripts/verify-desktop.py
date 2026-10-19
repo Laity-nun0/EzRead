@@ -175,6 +175,7 @@ def main():
                     assert item['layout']['documentWidth'] <= item['layout']['innerWidth'], f"Page horizontal overflow: {item['label']}"
                     grid, container = item['layout']['grid'], item['layout']['container']
                     assert grid['left'] >= container['left'] and grid['right'] <= container['right'] + 1, item
+                    assert abs(grid['left'] - container['left'] - container['paddingLeft']) <= 1, item
                 for monitor in ('1366x768', '1920x1080', '2560x1440', '1280x1440', '1080x1920'):
                     prefix = f'snap-{monitor}'
                     full, half, restored = (checks[f'{prefix}-{stage}'] for stage in ('full', 'half', 'restored'))
@@ -197,8 +198,6 @@ def main():
                     assert (item['minimumWidth'], item['minimumHeight']) == (960, 540), item
                     for card, original in zip(item['layout']['cards'], normal['layout']['cards']):
                         assert card['id'] == original['id'] and all(abs(card[key] - original[key]) <= 1 for key in ('width', 'height')), item
-                    grid, container = item['layout']['grid'], item['layout']['container']
-                    assert abs((grid['left'] - container['left']) - (container['right'] - grid['right'])) <= 1, item
                 flat = checks['flat']
                 assert flat['viewHeight'] > flat['clientHeight'], flat
                 assert flat['layout'] == checks['normal-1280']['layout'], flat

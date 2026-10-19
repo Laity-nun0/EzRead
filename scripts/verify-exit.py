@@ -219,9 +219,42 @@ def main():
                         assert request('/__test/close-state')['loadedNotes'] == crash_notes, 'Reopen lost the locally preserved crash draft.'
                     browsers = [handle(pid) for pid in descendants(window.pid)]
                     assert browsers, 'Native host had no WebView2 descendants to verify.'
+
+                    def translation_prompt():
+                        for dialog in visible_windows(window.pid):
+                            if window_class(dialog) != '#32770':
+                                continue
+                            title = ctypes.create_unicode_buffer(256)
+                            user.GetWindowTextW(dialog, title, len(title))
+                            if title.value == '暂停翻译并退出':
+                                return dialog
+                        return None
+
+                    def confirm_close():
+                        post(hwnd, 0x10)
+                        dialog = wait_until(translation_prompt, 5, 'Active translation did not prompt before close.')
+                        assert user.IsWindowVisible(hwnd), 'Translation reminder appeared after the main window hid.'
+                        assert window.poll() is None and backend.poll() is None
+                        assert all(not exited(value, 0) for value in handles), 'Reminder stopped model descendants before confirmation.'
+                        started = time.perf_counter()
+                        post(dialog, 0x111, 6)  # IDYES；仅作用于本次验收的确认框。
+                        return started
+
+                    if cycle == 0:
+                        post(hwnd, 0x10)
+                        dialog = wait_until(translation_prompt, 5, 'Translation reminder did not appear.')
+                        assert user.IsWindowVisible(hwnd) and not request('/__test/close-state')['attempts']
+                        post(dialog, 0x111, 7)  # IDNO 保持使用，不得进入保存/停止流程。
+                        wait_until(lambda: not user.IsWindowVisible(dialog), 1, 'Cancel did not dismiss the translation reminder.')
+                        assert user.IsWindowVisible(hwnd) and window.poll() is None and backend.poll() is None
+                        assert not request('/__test/close-state')['attempts'], 'Cancelling close started the save handshake.'
+                        assert request('/api/papers')['papers'][0]['pdf_layout_translation']['status'] == 'running'
+                        assert all(not exited(value, 0) for value in handles), 'Cancelling close stopped translation descendants.'
+                        checks.append({'translationReminderBeforeHide': True, 'cancelKeepsTaskRunning': True,
+                                       'cancelSkipsSaveHandshake': True})
                     if cycle in (7, 8):
                         started = time.monotonic()
-                        post(hwnd, 0x10)
+                        confirm_close()
                         wait_until(lambda: not visible_windows(window.pid), .25, 'Timeout close did not hide immediately.')
                         def timeout_dialog():
                             visible = visible_windows(window.pid)
@@ -237,7 +270,7 @@ def main():
                         if cycle == 8:
                             time.sleep(3)  # The fixture renderer finishes its intentional 4.5s stall.
                             assert not (data / 'desktop-close-drafts.json').exists(), 'Late script result committed a cancelled checkpoint.'
-                        post(hwnd, 0x10)
+                        confirm_close()
                         assert window.wait(timeout=15) == 0 and backend.wait(timeout=5) == 0
                         assert all(exited(value) for value in browsers + handles)
                         checks.append({'timeoutStage': 'save-confirmation' if cycle == 7 else 'draft-read',
@@ -245,7 +278,7 @@ def main():
                         continue
                     if cycle == 9:
                         started = time.monotonic()
-                        post(hwnd, 0x10)
+                        confirm_close()
                         assert window.wait(timeout=16) == 0
                         assert backend.wait(timeout=2) != 0, 'Stalled backend was not stopped at its deadline.'
                         assert all(exited(value) for value in browsers + handles)
@@ -256,7 +289,7 @@ def main():
                                        'confirmedNotesPreserved': True, 'allOwnedProcessesExited': True})
                         continue
                     if cycle in (4, 6):
-                        post(hwnd, 0x10)
+                        confirm_close()
                         wait_until(lambda: not visible_windows(window.pid), .25, 'Crash close did not hide its window.')
                         def checkpoint_ready():
                             content = log_path.read_bytes()[log_size:]
@@ -281,7 +314,7 @@ def main():
                             wait_until(lambda: not user.IsWindowVisible(dialog), 1, 'Recovery warning did not close.')
                             assert window.poll() is None and backend.poll() is None
                             assert b'close-recovery-recreated-webview' in log_path.read_bytes()[log_size:]
-                            post(hwnd, 0x10)
+                            confirm_close()
                             assert window.wait(timeout=15) == 0
                             assert backend.wait(timeout=5) == 0
                             assert all(exited(value) for value in browsers + handles)
@@ -300,8 +333,7 @@ def main():
                     hidden_times = []
                     for attempt in range(1, 3 if cycle == 0 else 2):
                         assert user.IsWindowVisible(hwnd), 'Main window was not visible before close.'
-                        started = time.perf_counter()
-                        post(hwnd, 0x10)  # WM_CLOSE, only the HWND from this isolated PID.
+                        started = confirm_close()
                         wait_until(lambda: not visible_windows(window.pid), .25, 'Close left a native window visible for over 250 ms.')
                         hidden_times.append(round((time.perf_counter() - started) * 1000, 2))
                         wait_until(lambda: len(request('/__test/close-state')['attempts']) >= attempt, .5, 'Close did not invoke the save hook.')

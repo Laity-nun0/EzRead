@@ -19,6 +19,7 @@
   --system-font: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
   --sidebar-width: 12.5rem;
   --sidebar-offset: var(--sidebar-width);
+  --workspace-tabs-height: 2.625rem;
   --radius-xs: 0.35rem;
   --radius-sm: 0.5rem;
   --radius-control: 0.5rem;
@@ -55,6 +56,27 @@
 }
 :is(.button,.nav-item,.filter-trigger,.filter-menu-option,.settings-tabs [role="tab"],.field input,.field select,.field textarea,.notes-area,.model-picker select,.paper-chat-compose) { border-radius: var(--radius-control); }
 :is(dialog,.reader-dialog,.drop-overlay) { border-radius: var(--radius-dialog); }
+
+/* 固定文献库入口与可横向浏览的阅读标签，阅读器内仍可随时返回文献库。 */
+.reader-tabs { position: sticky; top: 0; z-index: 20; display: flex; align-items: stretch; flex: none; min-width: 0; height: var(--workspace-tabs-height); gap: 6px; padding: 4px 10px; box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--bg); }
+.reader-tab-content { display: flex; flex: 1; gap: 6px; min-width: 0; }
+.reader-tab-list { position: relative; display: flex; gap: 5px; overflow-x: auto; min-width: 0; scrollbar-width: thin; }
+.reader-tabs button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: .82em; }
+.reader-tab-library { display: flex; align-items: center; gap: 6px; flex: none; padding: 0 10px; border-radius: 8px; }
+.reader-tab { display: flex; align-items: center; flex: 0 0 auto; max-width: 230px; min-width: 90px; border-radius: 8px; overflow: hidden; background: var(--surface-subtle); color: var(--muted); }
+.reader-tab-title { flex: 1; min-width: 0; padding: 6px 8px; border-radius: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.reader-tab-close { display: flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; border-radius: 6px; }
+.reader-tabs .icon { width: 15px; height: 15px; }
+.reader-tab.active, .reader-tab-library[aria-pressed="true"] { background: var(--green-soft); color: var(--green); box-shadow: inset 0 -2px var(--green); }
+.reader-tab > button { color: inherit; }
+.reader-tab:not(.active):hover, .reader-tab-library[aria-pressed="false"]:hover { background: var(--hover-fill); color: var(--text); }
+.reader-tabs button:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.workspace > .reader-dialog { position: absolute; inset: var(--workspace-tabs-height) 0 auto; width: 100%; max-width: none; height: calc(100dvh - var(--workspace-tabs-height)); max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; z-index: 10; }
+.reader-dialog > #reader-content { height: 100%; }
+.reader-dialog .reader-topbar { flex-wrap: wrap; }
+.reader-dialog .reader-tools { flex-wrap: wrap; max-width: 100%; }
+.reader-dialog .pane-bar { flex-wrap: wrap; }
+body:has(#reader-dialog[open]) .library-view { display: none; }
 :is(.filter-menu,.card-context-menu) { border-radius: var(--radius-menu); }
 :is(.queue-item,.bulkbar,.paper-drag-preview,.import-progress,.toast,.detail-cover) { border-radius: var(--radius-surface); }
 .sidebar {
@@ -76,10 +98,8 @@
 .sidebar .collections-nav { max-height: none; overflow: visible; }
 .collection-dot { width: 0.4rem; height: 0.4rem; margin: 0.3rem; background: var(--green); border-radius: 50%; flex: none; }
 .sidebar .sidebar-bottom { flex: none; padding-top: 0.8rem; margin-top: 0.75rem; border-top: 1px solid var(--line); background: var(--side); }
-.sidebar-utilities { display: flex; align-items: center; gap: 0.25rem; padding-inline: 0.4rem; }
-.sidebar-utilities #settings-button { width: auto; flex: 1; margin: 0; }
-#theme-toggle { width: 2.25rem; height: 2.25rem; border-radius: 50%; color: var(--text); }
-.workspace { margin-left: var(--sidebar-offset); }
+#theme-toggle { width: 2rem; height: 100%; flex: none; border-radius: 0.5rem; color: var(--text); }
+.workspace { position: relative; min-height: 100vh; margin-left: var(--sidebar-offset); }
 .library-view { max-width: none; width: 100%; padding: 1.5rem 1.5rem 4.5rem; }
 .library-header { display: flex; align-items: center; gap: 1.5rem; margin-bottom: 1.25rem; min-width: 0; }
 .library-header h1 { font-size: 1.45rem; white-space: nowrap; flex: none; }
@@ -106,7 +126,7 @@
 .library-filter-actions .filter-trigger > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .library-filter-actions .filter-trigger.has-filter { color: var(--green); background: var(--green-soft); }
 .library-filter-actions .select-trigger { min-height: 2.2rem; background: transparent; font-size: 0.75rem; }
-.paper-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 1.125rem; width: 100%; margin-inline: auto; min-width: 0; columns: auto; align-items: start; }
+.paper-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 1.125rem; width: 100%; margin-inline: 0; min-width: 0; columns: auto; align-items: start; }
 .paper-grid.masonry { position: relative; }
 .paper-grid.masonry > .paper-card { position: absolute; visibility: hidden; }
 .paper-grid.masonry.is-laid-out > .paper-card { visibility: visible; }
@@ -610,7 +630,6 @@ dialog {
   .settings-tabs button,
   .gallery-item,
   .page-thumb,
-  .reader-back,
   .card-context-menu button,
   .journal-catalogue-tier-trigger,
   .journal-catalogue-tier-option,
@@ -686,9 +705,6 @@ dialog {
   .page-thumb:hover {
     border-color: var(--green);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 15%, transparent);
-  }
-  .reader-back:hover {
-    background: var(--hover-fill);
   }
   .text-button:hover {
     text-decoration: none;
