@@ -131,11 +131,14 @@ def generate_pdfs(destination):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--generate-pdfs', type=Path, help=argparse.SUPPRESS)
-    parser.add_argument('--node', default=os.environ.get('EZREAD_NODE', r'D:\APP\Node\node.exe'))
+    parser.add_argument('--node', default=os.environ.get('EZREAD_NODE') or shutil.which('node'),
+                        help='Node.js executable; defaults to EZREAD_NODE or PATH')
     args = parser.parse_args()
     if args.generate_pdfs:
         generate_pdfs(args.generate_pdfs)
         return
+    if not args.node:
+        parser.error('Node.js is required; add it to PATH or pass --node <executable>')
     output = ROOT / 'output/playwright' / f'showcase-{uuid.uuid4().hex}'
     data, pdfs = output / 'data', output / 'synthetic-pdfs'
     output.mkdir(parents=True)
@@ -212,8 +215,6 @@ def main():
             environment = {**os.environ, 'EZREAD_TEST_URL': f'http://127.0.0.1:{server.PORT}',
                            'EZREAD_TEST_ROOT': str(ROOT), 'EZREAD_TEST_DATA': str(data),
                            'EZREAD_TEST_OUTPUT': str(output)}
-            runtime = Path.home() / '.cache/codex-runtimes/codex-primary-runtime/dependencies/node'
-            environment.setdefault('EZREAD_PLAYWRIGHT', str(runtime / 'node_modules/playwright'))
             subprocess.run([args.node, str(ROOT / 'tests/capture_showcase.cjs')], cwd=ROOT,
                            env=environment, timeout=180, check=True)
             assert not forbidden, forbidden
